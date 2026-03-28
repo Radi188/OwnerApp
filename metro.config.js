@@ -6,6 +6,13 @@ const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
  *
  * @type {import('@react-native/metro-config').MetroConfig}
  */
-const config = {};
+const config = {
+  resolver: {
+    blockList: [
+      // Exclude Claude Code memory directory to avoid EPERM during bundling
+      /\.claude\/.*/,
+    ],
+  },
+};
 
 module.exports = mergeConfig(getDefaultConfig(__dirname), config);
