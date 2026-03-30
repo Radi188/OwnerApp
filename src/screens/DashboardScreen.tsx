@@ -79,7 +79,14 @@ function RingProgress({ pct, color, size = 68 }: { pct: number; color: string; s
   const deg    = (safeP / 100) * 360;
   const half   = size / 2;
 
-  const ringStyle = {
+  // Each half-ring (top+right or bottom+left) spans exactly 180° of arc.
+  // Rotating it inside a half-clip reveals 0–180° of that arc:
+  //   rotate = −135° → 0° of arc visible (nothing)
+  //   rotate = +45°  → 180° of arc visible (full half)
+  const rotateRight = Math.min(deg, 180) - 135;          // drives 0–50%
+  const rotateLeft  = Math.max(deg - 180, 0) - 135;      // drives 50–100%
+
+  const ringBase = {
     position: 'absolute' as const,
     width: size, height: size,
     borderRadius: half,
@@ -88,24 +95,36 @@ function RingProgress({ pct, color, size = 68 }: { pct: number; color: string; s
 
   return (
     <View style={{ width: size, height: size }}>
-      <View style={[ringStyle, { borderColor: '#E5E7EB' }]} />
+      {/* Gray track */}
+      <View style={[ringBase, { borderColor: '#E5E7EB' }]} />
 
+      {/* Right half-clip: top+right borders colored, drives 0–50% */}
       <View style={{ position: 'absolute', width: half, height: size, left: half, overflow: 'hidden' }}>
-        <View style={[ringStyle, {
-          left: -half, borderColor: color,
-          transform: [{ rotate: `${deg <= 180 ? deg - 180 : 0}deg` }],
+        <View style={[ringBase, {
+          left: -half,
+          borderTopColor:    color,
+          borderRightColor:  color,
+          borderBottomColor: 'transparent',
+          borderLeftColor:   'transparent',
+          transform: [{ rotate: `${rotateRight}deg` }],
         }]} />
       </View>
 
+      {/* Left half-clip: bottom+left borders colored, drives 50–100% */}
       {deg > 180 && (
         <View style={{ position: 'absolute', width: half, height: size, left: 0, overflow: 'hidden' }}>
-          <View style={[ringStyle, {
-            borderColor: color,
-            transform: [{ rotate: `${deg - 360}deg` }],
+          <View style={[ringBase, {
+            left: 0,
+            borderTopColor:    'transparent',
+            borderRightColor:  'transparent',
+            borderBottomColor: color,
+            borderLeftColor:   color,
+            transform: [{ rotate: `${rotateLeft}deg` }],
           }]} />
         </View>
       )}
 
+      {/* Centre label */}
       <View style={{ position: 'absolute', width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
         <Text style={{ fontSize: 13, fontWeight: '800', color, letterSpacing: -0.3 }}>{safeP}%</Text>
         <Text style={{ fontSize: 9, color: '#9CA3AF', fontWeight: '600' }}>rate</Text>
@@ -170,8 +189,8 @@ export default function DashboardScreen() {
 
   const fmtMoney = (n: number) =>
     n >= 1_000_000
-      ? (n / 1_000_000).toFixed(1) + 'M ៛'
-      : (n ?? 0).toLocaleString() + ' ៛';
+      ? '$' + (n / 1_000_000).toFixed(1) + 'M'
+      : '$' + (n ?? 0).toLocaleString();
 
   const username = user?.username ?? 'Owner';
   const initials = username.substring(0, 2).toUpperCase();

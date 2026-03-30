@@ -1,5 +1,6 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
+import { navigationRef } from './navigationRef';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { useAuth } from '../context/AuthContext';
@@ -92,15 +93,23 @@ export default function AppNavigator() {
   const { isAuthenticated } = useAuth();
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <RootStack.Navigator screenOptions={{ headerShown: false, animation: 'none' }}>
         {!isAuthenticated ? (
           <>
             <RootStack.Screen name="Splash" component={SplashScreen} />
-            <RootStack.Screen name="Login"  component={LoginScreen} />
+            <RootStack.Screen
+              name="Login"
+              component={LoginScreen}
+              options={{ animation: 'fade', animationDuration: 350 }}
+            />
           </>
         ) : (
-          <RootStack.Screen name="Main" component={MainTabs} />
+          <RootStack.Screen
+            name="Main"
+            component={MainTabs}
+            options={{ animation: 'fade', animationDuration: 500 }}
+          />
         )}
       </RootStack.Navigator>
     </NavigationContainer>

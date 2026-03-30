@@ -12,6 +12,8 @@ import {
   ActivityIndicator,
   Modal,
   FlatList,
+  Keyboard,
+  useWindowDimensions,
 } from 'react-native';
 import {
   SafeAreaView,
@@ -84,6 +86,21 @@ export default function RequestDetailScreen() {
   const [employees, setEmployees] = useState<any[]>([]);
   const [loadingEmps, setLoadingEmps] = useState(false);
 
+  // Complete bottom sheet
+  const [showCompleteSheet, setShowCompleteSheet] = useState(false);
+  const [completeCost, setCompleteCost]           = useState('');
+  const [completeNote, setCompleteNote]           = useState('');
+  const [completeIsBillable, setCompleteIsBillable] = useState(false);
+  const [completing, setCompleting]               = useState(false);
+  const [keyboardVisible, setKeyboardVisible]     = useState(false);
+  const [isCostFocused, setIsCostFocused]         = useState(false);
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+
   const loadData = useCallback(async () => {
     try {
       const res = await maintenanceApi.get(requestId);
@@ -142,13 +159,21 @@ export default function RequestDetailScreen() {
   };
 
   const handleAdvance = () => {
-    const cur = stepIndex(status);
+    const cur  = stepIndex(status);
     const next = STEPS[cur + 1];
     if (!next) return;
 
     if (status === 'pending') {
-      // Need employee selection
       openAssignPicker();
+      return;
+    }
+
+    // Completing — open the cost/details sheet instead of an Alert
+    if (next.key === 'completed') {
+      setCompleteCost('');
+      setCompleteNote('');
+      setCompleteIsBillable(false);
+      setShowCompleteSheet(true);
       return;
     }
 
@@ -159,8 +184,7 @@ export default function RequestDetailScreen() {
         onPress: async () => {
           setUpdating(true);
           try {
-            if (next.key === 'in_progress') await maintenanceApi.start(requestId);
-            else if (next.key === 'completed') await maintenanceApi.complete(requestId);
+            await maintenanceApi.start(requestId);
             setStatus(next.key);
             setItem((prev: any) => ({ ...prev, status: next.key }));
           } catch (e: any) {
@@ -171,6 +195,32 @@ export default function RequestDetailScreen() {
         },
       },
     ]);
+  };
+
+  const handleComplete = async () => {
+    setCompleting(true);
+    try {
+      const cost = completeCost.trim() ? parseFloat(completeCost) : undefined;
+      const note = completeNote.trim()  || undefined;
+      await maintenanceApi.complete(requestId, {
+        cost,
+        note,
+        isBillable: completeIsBillable,
+      });
+      setStatus('completed');
+      setItem((prev: any) => ({
+        ...prev,
+        status:     'completed',
+        cost:       cost != null ? String(cost) : prev.cost,
+        note:       note ?? prev.note,
+        isBillable: completeIsBillable,
+      }));
+      setShowCompleteSheet(false);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message ?? 'Failed to complete request.');
+    } finally {
+      setCompleting(false);
+    }
   };
 
   const handleCancel = () => {
@@ -284,6 +334,133 @@ export default function RequestDetailScreen() {
             )}
           </View>
         </View>
+      </Modal>
+
+      {/* ── Complete Bottom Sheet ── */}
+      <Modal
+        visible={showCompleteSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowCompleteSheet(false)}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={s.modalOverlay}>
+            <View style={s.modalSheet}>
+              <View style={s.modalHandle} />
+
+              {/* Header */}
+              <View style={s.modalHeader}>
+                <View style={s.completeHeaderLeft}>
+                  <View style={s.completeHeaderIcon}>
+                    <Icon name="checkmark-circle" size={18} color="#16A34A" />
+                  </View>
+                  <View>
+                    <Text style={s.modalTitle}>Complete Request</Text>
+                    <Text style={s.completeSubtitle}>Add cost & completion details</Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setShowCompleteSheet(false)}
+                  style={s.modalClose}
+                >
+                  <Icon name="close" size={18} color="#6B7280" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={s.completeBody}>
+                {/* Cost row */}
+                <View style={s.completeField}>
+                  <Text style={s.completeLabel}>Cost (optional)</Text>
+                  <View style={[s.costWrapper, isCostFocused && s.costWrapperFocused]}>
+                    <Text style={s.costPrefix}>$</Text>
+                    <TextInput
+                      style={s.costInput}
+                      placeholder="0.00"
+                      placeholderTextColor="#C4C9D4"
+                      value={completeCost}
+                      onChangeText={setCompleteCost}
+                      keyboardType="numeric"
+                      returnKeyType="done"
+                      onFocus={() => setIsCostFocused(true)}
+                      onBlur={() => setIsCostFocused(false)}
+                      onSubmitEditing={() => Keyboard.dismiss()}
+                    />
+                    {completeCost.length > 0 && (
+                      <TouchableOpacity
+                        onPress={() => setCompleteCost('')}
+                        style={s.costClear}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Icon name="close-circle" size={18} color="#C4C9D4" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+
+                {/* Billable toggle */}
+                <TouchableOpacity
+                  style={s.billableRow}
+                  activeOpacity={0.7}
+                  onPress={() => setCompleteIsBillable(v => !v)}
+                >
+                  <View style={s.billableLeft}>
+                    <View style={[s.billableIcon, completeIsBillable && s.billableIconActive]}>
+                      <Icon
+                        name="receipt-outline"
+                        size={14}
+                        color={completeIsBillable ? '#6366F1' : '#9CA3AF'}
+                      />
+                    </View>
+                    <View>
+                      <Text style={s.billableTitle}>Billable to tenant</Text>
+                      <Text style={s.billableSub}>Charge this cost to the tenant's account</Text>
+                    </View>
+                  </View>
+                  <View style={[s.toggle, completeIsBillable && s.toggleActive]}>
+                    <View style={[s.toggleThumb, completeIsBillable && s.toggleThumbActive]} />
+                  </View>
+                </TouchableOpacity>
+
+                {/* Note / description */}
+                <View style={s.completeField}>
+                  <Text style={s.completeLabel}>Completion notes (optional)</Text>
+                  <TextInput
+                    style={s.noteInput}
+                    placeholder="Describe what was done, parts used, etc."
+                    placeholderTextColor="#9CA3AF"
+                    value={completeNote}
+                    onChangeText={setCompleteNote}
+                    multiline
+                    numberOfLines={4}
+                    textAlignVertical="top"
+                  />
+                </View>
+
+                {/* Confirm button — hidden while keyboard is open */}
+                {!keyboardVisible && (
+                  <TouchableOpacity
+                    style={[s.completeConfirmBtn, completing && { opacity: 0.7 }]}
+                    onPress={handleComplete}
+                    activeOpacity={0.85}
+                    disabled={completing}
+                  >
+                    {completing ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <Icon name="checkmark-circle" size={17} color="#fff" />
+                        <Text style={s.completeConfirmText}>Mark as Completed</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ── Dark hero header ── */}
@@ -599,6 +776,7 @@ export default function RequestDetailScreen() {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
     </SafeAreaView>
   );
 }
@@ -679,6 +857,14 @@ const s = StyleSheet.create({
   },
 
   // Header title (loading/error states)
+  header: {
+    flexDirection:   'row',
+    alignItems:      'center',
+    justifyContent:  'space-between',
+    paddingHorizontal: 16,
+    paddingBottom:   14,
+    backgroundColor: 'rgba(49,46,129,0.95)',
+  },
   headerTitle: { fontSize: 16, fontWeight: '800', color: '#fff' },
 
   // Card
@@ -898,4 +1084,116 @@ const s = StyleSheet.create({
   pickerSep: { height: StyleSheet.hairlineWidth, backgroundColor: '#F3F4F6', marginLeft: 74 },
   emptyPicker: { alignItems: 'center', paddingVertical: 40, gap: 10 },
   emptyPickerText: { fontSize: 14, color: '#9CA3AF', fontWeight: '600' },
+
+  // Complete sheet
+  completeHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  completeHeaderIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#F0FDF4',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  completeSubtitle: { fontSize: 11, color: '#9CA3AF', fontWeight: '500', marginTop: 1 },
+  completeBody: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 28, gap: 16 },
+  completeField: { gap: 8 },
+  completeLabel: { fontSize: 12, fontWeight: '700', color: '#374151', letterSpacing: 0.1 },
+  costWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+  },
+  costWrapperFocused: {
+    borderColor: '#6366F1',
+    backgroundColor: '#FAFAFE',
+  },
+  costPrefix: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#6B7280',
+    marginRight: 6,
+  },
+  costInput: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    paddingVertical: 12,
+  },
+  costClear: {
+    paddingLeft: 6,
+  },
+  billableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    padding: 14,
+    gap: 12,
+  },
+  billableLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  billableIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  billableIconActive: { backgroundColor: '#EEF2FF' },
+  billableTitle: { fontSize: 13, fontWeight: '700', color: '#111827' },
+  billableSub:   { fontSize: 11, color: '#9CA3AF', marginTop: 1 },
+  toggle: {
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#E5E7EB',
+    padding: 3,
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  toggleActive: { backgroundColor: '#6366F1' },
+  toggleThumb: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  toggleThumbActive: { alignSelf: 'flex-end' },
+  noteInput: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: '#111827',
+    minHeight: 100,
+  },
+  completeConfirmBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#16A34A',
+    borderRadius: 16,
+    paddingVertical: 15,
+    marginTop: 4,
+  },
+  completeConfirmText: { fontSize: 15, fontWeight: '800', color: '#fff' },
 });

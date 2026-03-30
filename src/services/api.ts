@@ -359,6 +359,12 @@ export const announcementsApi = {
   },
 };
 
+// ─── Device Token ─────────────────────────────────────────────────────────────
+export const deviceApi = {
+  registerToken: (fcmToken: string) =>
+    apiFetch('/users/me', { method: 'PATCH', body: JSON.stringify({ fcmToken }) }),
+};
+
 // ─── Notifications ────────────────────────────────────────────────────────────
 export const notificationsApi = {
   list: () => apiFetch('/notifications?limit=50'),

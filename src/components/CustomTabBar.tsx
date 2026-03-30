@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import {
   View,
   TouchableOpacity,
@@ -11,6 +11,7 @@ import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
+import { useBadges } from '../context/BadgeContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const TAB_COUNT       = 5;
@@ -20,12 +21,6 @@ const INDICATOR_WIDTH = 32;
 
 const ACTIVE_COLOR   = '#6366F1';
 const INACTIVE_COLOR = '#9CA3AF';
-
-// Unread badge counts (mock)
-const BADGES: Record<string, number> = {
-  Requests:      4,
-  Notifications: 2,
-};
 
 type TabConfig = {
   icon:       string;
@@ -47,6 +42,12 @@ const indicatorCenter = (index: number) =>
 export default function CustomTabBar({ state, navigation }: BottomTabBarProps) {
   const { t }  = useTranslation();
   const insets = useSafeAreaInsets();
+  const { requestCount, notificationCount } = useBadges();
+
+  const BADGES: Record<string, number> = {
+    Requests:      requestCount,
+    Notifications: notificationCount,
+  };
 
   const indicatorX = useRef(
     new Animated.Value(indicatorCenter(state.index)),
@@ -56,46 +57,41 @@ export default function CustomTabBar({ state, navigation }: BottomTabBarProps) {
     state.routes.map((_, i) => new Animated.Value(i === state.index ? 1 : 0)),
   ).current;
 
+  // Sync animations whenever state.index changes (programmatic navigation)
+  useEffect(() => {
+    const index = state.index;
+
+    state.routes.forEach((_, i) => {
+      if (i !== index) {
+        activeAnims[i].stopAnimation();
+        activeAnims[i].setValue(0);
+      }
+    });
+
+    Animated.spring(activeAnims[index], {
+      toValue: 1, useNativeDriver: false,
+      damping: 14, stiffness: 200, mass: 0.7,
+    }).start();
+
+    Animated.spring(indicatorX, {
+      toValue: indicatorCenter(index), useNativeDriver: true,
+      damping: 20, stiffness: 220, mass: 0.8,
+    }).start();
+  }, [state.index]);
+
   const handlePress = (index: number) => {
-    const route    = state.routes[index];
+    const route     = state.routes[index];
     const isFocused = state.index === index;
 
-    if (!isFocused) {
-      // Instantly reset all other tabs
-      state.routes.forEach((_, i) => {
-        if (i !== index) {
-          activeAnims[i].stopAnimation();
-          activeAnims[i].setValue(0);
-        }
-      });
-
-      // Spring-animate the newly active tab
-      Animated.spring(activeAnims[index], {
-        toValue:       1,
-        useNativeDriver: false,
-        damping:   14,
-        stiffness: 200,
-        mass:      0.7,
-      }).start();
-
-      // Slide the indicator
-      Animated.spring(indicatorX, {
-        toValue:       indicatorCenter(index),
-        useNativeDriver: true,
-        damping:   20,
-        stiffness: 220,
-        mass:      0.8,
-      }).start();
-    }
-
     const event = navigation.emit({
-      type:               'tabPress',
-      target:             route.key,
-      canPreventDefault:  true,
+      type:              'tabPress',
+      target:            route.key,
+      canPreventDefault: true,
     });
 
     if (!isFocused && !event.defaultPrevented) {
       navigation.navigate(route.name);
+      // state.index change triggers the useEffect above, which animates everything
     }
   };
 
