@@ -14,9 +14,6 @@ if linkage != nil
   use_frameworks! :linkage => linkage.to_sym
 end
 
-# Required for Firebase
-use_frameworks! :linkage => :static
-
 target 'OwnerApp' do
   config = use_native_modules!
 
@@ -25,6 +22,19 @@ target 'OwnerApp' do
     # An absolute path to your application root.
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
+
+  # Firebase pods — modular_headers allows @import without use_frameworks!
+  # This avoids the "must be imported from module RNFBApp" compile errors.
+  pod 'Firebase', :modular_headers => true
+  pod 'FirebaseCore', :modular_headers => true
+  pod 'FirebaseCoreExtension', :modular_headers => true
+  pod 'FirebaseCoreInternal', :modular_headers => true
+  pod 'FirebaseInstallations', :modular_headers => true
+  pod 'FirebaseMessaging', :modular_headers => true
+  pod 'GoogleDataTransport', :modular_headers => true
+  pod 'GoogleUtilities', :modular_headers => true
+  pod 'PromisesObjC', :modular_headers => true
+  pod 'nanopb', :modular_headers => true
 
   post_install do |installer|
     react_native_post_install(
