@@ -14,11 +14,13 @@ import {
   FlatList,
   Animated,
   Pressable,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import { notificationsApi, announcementsApi, contractsApi } from '../services/api';
+import { useBadges } from '../context/BadgeContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Segment          = 'notifications' | 'announcements';
@@ -40,6 +42,9 @@ type UnitRow = {
   contractId: number; unitId: number; unitCode: string;
   floorNumber: number | null; tenantName: string; tenantUserId: number | null;
 };
+type DetailItem =
+  | { kind: 'notif'; data: NotifItem }
+  | { kind: 'ann';   data: AnnouncementItem };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CATEGORY_META: Record<NotifCategory, { icon: string; iconBg: string; iconColor: string; label: string }> = {
@@ -92,6 +97,12 @@ function timeAgo(dateStr: string): string {
   if (days < 7)  return `${days}d ago`;
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
+function fullDateTime(dateStr: string): string {
+  const d = new Date(dateStr);
+  const date = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return `${date} · ${time}`;
+}
 function dateGroupKey(dateStr: string): string {
   const d = new Date(dateStr); const now = new Date();
   const diff = Math.floor((now.setHours(0,0,0,0) - d.setHours(0,0,0,0)) / 86400000);
@@ -139,10 +150,10 @@ function NotifCard({ item, onPress }: { item: NotifItem; onPress: (id: number) =
 }
 
 // ─── Announcement Card ─────────────────────────────────────────────────────────
-function AnnounceCard({ item }: { item: AnnouncementItem }) {
+function AnnounceCard({ item, onPress }: { item: AnnouncementItem; onPress: (item: AnnouncementItem) => void }) {
   const aud = AUDIENCE_META[item.audience] ?? AUDIENCE_META.all;
   return (
-    <View style={ac.card}>
+    <TouchableOpacity style={ac.card} activeOpacity={0.75} onPress={() => onPress(item)}>
       <View style={ac.inner}>
         <View style={ac.iconWrap}>
           <Icon name="megaphone" size={20} color="#6366F1" />
@@ -159,7 +170,86 @@ function AnnounceCard({ item }: { item: AnnouncementItem }) {
           <Text style={ac.content} numberOfLines={2}>{item.content}</Text>
         </View>
       </View>
-    </View>
+    </TouchableOpacity>
+  );
+}
+
+// ─── Detail Sheet (full view of a notification / announcement) ────────────────
+function DetailSheet({ item, visible, onClose }: { item: DetailItem | null; visible: boolean; onClose: () => void }) {
+  const insets    = useSafeAreaInsets();
+  const slideAnim = useRef(new Animated.Value(700)).current;
+
+  useEffect(() => {
+    if (visible) {
+      slideAnim.setValue(700);
+      Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, tension: 60, friction: 12 }).start();
+    }
+  }, [visible, slideAnim]);
+
+  const handleClose = () => {
+    Animated.timing(slideAnim, { toValue: 700, duration: 220, useNativeDriver: true }).start(onClose);
+  };
+
+  if (!item) return null;
+
+  const isNotif = item.kind === 'notif';
+  const title   = item.data.title;
+  const body    = isNotif ? (item.data as NotifItem).body : (item.data as AnnouncementItem).content;
+  const created = item.data.createdAt;
+
+  let icon: string, iconBg: string, iconColor: string;
+  let pillLabel: string, pillBg: string, pillColor: string, pillIcon: string | null = null;
+  if (isNotif) {
+    const meta = CATEGORY_META[typeToCategory((item.data as NotifItem).type)];
+    ({ icon, iconBg, iconColor } = meta);
+    pillLabel = meta.label; pillBg = meta.iconBg; pillColor = meta.iconColor;
+  } else {
+    const aud = AUDIENCE_META[(item.data as AnnouncementItem).audience] ?? AUDIENCE_META.all;
+    icon = 'megaphone'; iconBg = '#EEF2FF'; iconColor = '#6366F1';
+    pillLabel = aud.label; pillBg = aud.bg; pillColor = aud.color; pillIcon = aud.icon;
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
+      <Pressable style={cs.backdrop} onPress={handleClose} />
+      <Animated.View style={[cs.sheet, ds.sheet, { transform: [{ translateY: slideAnim }], paddingBottom: insets.bottom + 16 }]}>
+        <View style={cs.handle} />
+
+        <View style={cs.header}>
+          <TouchableOpacity onPress={handleClose} style={cs.closeBtn} activeOpacity={0.7}>
+            <Icon name="close" size={18} color="#6B7280" />
+          </TouchableOpacity>
+          <Text style={cs.headerTitle}>{isNotif ? 'Notification' : 'Announcement'}</Text>
+          <View style={ds.headerSpacer} />
+        </View>
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={ds.content}>
+          <View style={ds.metaRow}>
+            <View style={[ds.iconWrap, { backgroundColor: iconBg }]}>
+              <Icon name={icon} size={24} color={iconColor} />
+            </View>
+            <View style={ds.metaText}>
+              <View style={[ds.pill, { backgroundColor: pillBg }]}>
+                {pillIcon && <Icon name={pillIcon} size={11} color={pillColor} />}
+                <Text style={[ds.pillText, { color: pillColor }]}>{pillLabel}</Text>
+              </View>
+              <View style={ds.dateRow}>
+                <Icon name="time-outline" size={13} color="#9CA3AF" />
+                <Text style={ds.dateText}>{fullDateTime(created)}</Text>
+              </View>
+            </View>
+          </View>
+
+          <Text style={ds.title} selectable>{title}</Text>
+          <View style={ds.divider} />
+          <Text style={ds.body} selectable>{body}</Text>
+        </ScrollView>
+
+        <TouchableOpacity style={ds.doneBtn} onPress={handleClose} activeOpacity={0.8}>
+          <Text style={ds.doneText}>Close</Text>
+        </TouchableOpacity>
+      </Animated.View>
+    </Modal>
   );
 }
 
@@ -570,7 +660,9 @@ function ComposeSheet({
 export default function NotificationsScreen() {
   const { t }  = useTranslation();
   const insets = useSafeAreaInsets();
+  const { refreshBadges } = useBadges();
 
+  const [detail,         setDetail]         = useState<DetailItem | null>(null);
   const [segment,        setSegment]        = useState<Segment>('notifications');
   const [notifications,  setNotifications]  = useState<NotifItem[]>([]);
   const [announcements,  setAnnouncements]  = useState<AnnouncementItem[]>([]);
@@ -626,18 +718,25 @@ export default function NotificationsScreen() {
 
   const handleOpenCompose = () => { loadUnits(); setComposeVisible(true); };
 
-  const handleMarkRead = async (id: number) => {
-    try {
-      await notificationsApi.markRead(id);
+  // Open the full view; mark unread notifications as read in the background
+  const handleOpenNotif = (id: number) => {
+    const item = notifications.find(n => n.id === id);
+    if (!item) return;
+    setDetail({ kind: 'notif', data: item });
+    if (!item.isRead) {
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
-    } catch {/* silent */}
+      notificationsApi.markRead(id).then(refreshBadges).catch(() => {/* silent */});
+    }
   };
 
-  const handleMarkAllRead = () => {
+  const handleOpenAnnouncement = (item: AnnouncementItem) => setDetail({ kind: 'ann', data: item });
+
+  const handleMarkAllRead = async () => {
     const unread = notifications.filter(n => !n.isRead);
     if (!unread.length) return;
-    unread.forEach(n => notificationsApi.markRead(n.id).catch(() => {}));
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    await Promise.allSettled(unread.map(n => notificationsApi.markRead(n.id)));
+    refreshBadges();
   };
 
   const unreadCount = notifications.filter(n => !n.isRead).length;
@@ -780,8 +879,8 @@ export default function NotificationsScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#6366F1']} tintColor="#6366F1" />}
           renderItem={({ item }) => {
             if (item.kind === 'header') return <SectionLabel label={item.label} />;
-            if (item.kind === 'notif')  return <NotifCard item={item.data as NotifItem} onPress={handleMarkRead} />;
-            return <AnnounceCard item={item.data as AnnouncementItem} />;
+            if (item.kind === 'notif')  return <NotifCard item={item.data as NotifItem} onPress={handleOpenNotif} />;
+            return <AnnounceCard item={item.data as AnnouncementItem} onPress={handleOpenAnnouncement} />;
           }}
           ListEmptyComponent={
             <View style={s.emptyWrap}>
@@ -807,6 +906,9 @@ export default function NotificationsScreen() {
         onNotifSent={n => setNotifications(prev => [n, ...prev])}
         onAnnounceSent={a => setAnnouncements(prev => [a, ...prev])}
       />
+
+      {/* ── Full-view detail sheet ── */}
+      <DetailSheet item={detail} visible={detail !== null} onClose={() => setDetail(null)} />
     </SafeAreaView>
   );
 }
@@ -889,6 +991,24 @@ const ac = StyleSheet.create({
   time:    { fontSize: 11, color: '#9CA3AF', fontWeight: '500' },
   title:   { fontSize: 14, fontWeight: '800', color: '#111827', marginBottom: 4, lineHeight: 20 },
   content: { fontSize: 12, color: '#6B7280', lineHeight: 18 },
+});
+
+const ds = StyleSheet.create({
+  sheet:    { maxHeight: '85%' },
+  headerSpacer: { width: 32 },
+  metaText: { flex: 1, gap: 6 },
+  content:  { paddingBottom: 20 },
+  metaRow:  { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 18 },
+  iconWrap: { width: 54, height: 54, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  pill:     { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', borderRadius: 7, paddingHorizontal: 8, paddingVertical: 3 },
+  pillText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
+  dateRow:  { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  dateText: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
+  title:    { fontSize: 19, fontWeight: '800', color: '#111827', lineHeight: 26, letterSpacing: -0.3 },
+  divider:  { height: StyleSheet.hairlineWidth, backgroundColor: '#E5E7EB', marginVertical: 16 },
+  body:     { fontSize: 15, color: '#374151', lineHeight: 23 },
+  doneBtn:  { backgroundColor: '#F3F4F6', borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
+  doneText: { fontSize: 15, fontWeight: '700', color: '#374151' },
 });
 
 const sl = StyleSheet.create({
