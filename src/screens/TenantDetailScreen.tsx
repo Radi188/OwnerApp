@@ -11,11 +11,11 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
 import type { TenantsStackParamList } from '../navigation/AppNavigator';
 import { useTranslation } from 'react-i18next';
 import { tenantsApi, maintenanceApi, utilityApi } from '../services/api';
-import { hasInvoice } from '../store/invoiceStore';
+import { getInvoice, hydrateInvoices, currentMonthKey, monthKey } from '../store/invoiceStore';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type InvoiceRange    = 'last_month' | '3_months' | '6_months' | '1_year';
@@ -64,6 +64,14 @@ function fmtMonth(ym: string): string {
 function fmtMoney(n: number): string {
   return n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M ៛' : n.toLocaleString() + ' ៛';
 }
+function fmtKhr(n: number): string {
+  return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' ៛';
+}
+function fmtShortDate(d: string | null | undefined): string {
+  if (!d) return '';
+  const date = new Date(d);
+  return isNaN(date.getTime()) ? '' : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
   const mins = Math.floor(diff / 60000);
@@ -91,16 +99,24 @@ export default function TenantDetailScreen() {
   const [invoicesLoading, setInvoicesLoading] = useState(false);
   const [loading,         setLoading]         = useState(true);
   const [invoiceBtnLoading, setInvoiceBtnLoading] = useState(false);
+  // This month's invoice as saved on the API (source of truth for "generated")
+  const [currentInvoice,  setCurrentInvoice]  = useState<any>(null);
 
   const billingMonth     = currentBillingMonth();
-  const invoiceGenerated = hasInvoice(String(tenantId), billingMonth);
+  const invoiceRecord    = getInvoice(String(tenantId), currentMonthKey()); // local extras: readings, breakdown
+  const invoiceGenerated = !!currentInvoice || !!invoiceRecord;
 
   const loadData = useCallback(async () => {
     try {
-      const [tenantRes, mntRes] = await Promise.all([
+      const [tenantRes, mntRes, invRes] = await Promise.all([
         tenantsApi.get(tenantId),
         maintenanceApi.list().catch(() => null),
+        tenantsApi.invoices(tenantId, '3_months').catch(() => null),
+        hydrateInvoices(),
       ]);
+      const thisMonth = currentMonthKey();
+      const apiInvoices: any[] = invRes?.data?.invoices ?? [];
+      setCurrentInvoice(apiInvoices.find(inv => monthKey(inv.billingMonth) === thisMonth) ?? null);
       const t = tenantRes?.data?.tenants ?? tenantRes?.data?.tenant ?? null;
       setTenant(t);
       const tenantContracts: any[] = t?.contracts ?? [];
@@ -122,7 +138,8 @@ export default function TenantDetailScreen() {
     }
   }, [tenantId]);
 
-  useEffect(() => { loadData(); },                          [loadData]);
+  // Reload whenever the screen regains focus (e.g. coming back after generating an invoice)
+  useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
   useEffect(() => { loadInvoices(invoiceRange); }, [invoiceRange, loadInvoices]);
 
   // ── Skeleton header (shared by loading/error states) ──────────────────────
@@ -169,6 +186,13 @@ export default function TenantDetailScreen() {
   const isActive      = tenant.status === 'Active' || tenant.status === 'active';
   const urgentCount   = maintenance.filter(m => m.priority === 'urgent' || m.priority === 'high').length;
 
+  // Ticket values: prefer the API, fall back to the local record
+  const ticketTotal   = currentInvoice
+    ? parseFloat(currentInvoice.totalAmount ?? currentInvoice.amount ?? 0) || 0
+    : invoiceRecord?.total ?? 0;
+  const ticketDue     = fmtShortDate(currentInvoice?.dueDate ?? invoiceRecord?.scheduledDate);
+  const ticketStatus  = INVOICE_STATUS_META[(currentInvoice?.status ?? 'pending') as InvoiceStatus] ?? INVOICE_STATUS_META.pending;
+
   // ── Handlers ───────────────────────────────────────────────────────────────
   const handleCall = () => {
     if (!tenant.phoneNumber) return;
@@ -195,6 +219,15 @@ export default function TenantDetailScreen() {
         contractId:  activeContract.id,
         unitId,
         lastReading: res,
+        apiInvoice:  currentInvoice
+          ? {
+              id:           currentInvoice.id,
+              totalAmount:  parseFloat(currentInvoice.totalAmount ?? currentInvoice.amount ?? 0),
+              dueDate:      currentInvoice.dueDate ?? null,
+              status:       currentInvoice.status,
+              billingMonth: currentInvoice.billingMonth,
+            }
+          : null,
       });
     } catch {
       Alert.alert('Error', 'Could not fetch utility readings. Please try again.');
@@ -284,19 +317,71 @@ export default function TenantDetailScreen() {
 
           {/* Invoice status / CTA */}
           {invoiceGenerated ? (
-            <View style={s.invoiceGeneratedBanner}>
-              <View style={s.invoiceGeneratedLeft}>
-                <Icon name="checkmark-circle" size={18} color="#22C55E" />
-                <View>
-                  <Text style={s.invoiceGeneratedTitle}>Invoice Generated</Text>
-                  <Text style={s.invoiceGeneratedSub}>{billingMonth}</Text>
+            <TouchableOpacity
+              style={s.ticket}
+              onPress={navigateToInvoice}
+              activeOpacity={0.9}
+              disabled={invoiceBtnLoading}
+            >
+              {/* Top: month + total + due date */}
+              <View style={s.ticketTop}>
+                <View style={s.ticketIcon}>
+                  <Icon name="receipt-outline" size={20} color="#4F46E5" />
+                  <View style={s.ticketCheck}>
+                    <Icon name="checkmark" size={9} color="#FFFFFF" />
+                  </View>
+                </View>
+                <View style={s.ticketMain}>
+                  <View style={s.ticketOverRow}>
+                    <Text style={s.ticketOverline} numberOfLines={1}>{billingMonth}</Text>
+                    <View style={[s.ticketStatus, { backgroundColor: ticketStatus.bg }]}>
+                      <Icon name={ticketStatus.icon} size={10} color={ticketStatus.color} />
+                      <Text style={[s.ticketStatusText, { color: ticketStatus.color }]}>{ticketStatus.label}</Text>
+                    </View>
+                  </View>
+                  <Text style={s.ticketAmount} numberOfLines={1} adjustsFontSizeToFit>{fmtKhr(ticketTotal)}</Text>
+                </View>
+                {!!ticketDue && (
+                  <View style={s.ticketDue}>
+                    <Text style={s.ticketDueLabel}>Due</Text>
+                    <Text style={s.ticketDueValue}>{ticketDue}</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Perforated divider */}
+              <View style={s.ticketPerf}>
+                {Array.from({ length: 40 }).map((_, i) => <View key={i} style={s.ticketPerfDash} />)}
+              </View>
+
+              {/* Bottom: status / breakdown + view */}
+              <View style={s.ticketBottom}>
+                <View style={s.ticketBreakdown}>
+                  {invoiceRecord ? (
+                    <>
+                      <View style={s.ticketBreakItem}>
+                        <Icon name="flash" size={12} color="#F59E0B" />
+                        <Text style={s.ticketBreakText} numberOfLines={1}>{fmtKhr(invoiceRecord.elecCost)}</Text>
+                      </View>
+                      <View style={s.ticketBreakItem}>
+                        <Icon name="water" size={12} color="#0EA5E9" />
+                        <Text style={s.ticketBreakText} numberOfLines={1}>{fmtKhr(invoiceRecord.waterCost)}</Text>
+                      </View>
+                    </>
+                  ) : (
+                    <Text style={s.ticketBreakText} numberOfLines={1}>Saved to server</Text>
+                  )}
+                </View>
+                <View style={s.ticketView}>
+                  <Text style={s.ticketViewText}>View</Text>
+                  <View style={s.ticketViewArrow}>
+                    {invoiceBtnLoading
+                      ? <ActivityIndicator size="small" color="#FFFFFF" />
+                      : <Icon name="arrow-forward" size={14} color="#FFFFFF" />}
+                  </View>
                 </View>
               </View>
-              <TouchableOpacity style={s.invoiceViewBtn} onPress={navigateToInvoice} activeOpacity={0.8}>
-                <Text style={s.invoiceViewBtnText}>View</Text>
-                <Icon name="chevron-forward" size={12} color="#86EFAC" />
-              </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
           ) : (
             <TouchableOpacity
               style={s.invoiceBtn}
@@ -615,16 +700,39 @@ const s = StyleSheet.create({
   },
   invoiceBtnText: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
 
-  invoiceGeneratedBanner: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: 'rgba(34,197,94,0.15)', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 12,
-    borderWidth: 1, borderColor: 'rgba(34,197,94,0.3)',
+  // Generated invoice — white "ticket" that pops off the indigo hero
+  ticket: {
+    backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden',
+    shadowColor: '#1E1B4B', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25, shadowRadius: 12, elevation: 6,
   },
-  invoiceGeneratedLeft:  { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  invoiceGeneratedTitle: { fontSize: 13, fontWeight: '800', color: '#86EFAC' },
-  invoiceGeneratedSub:   { fontSize: 11, color: 'rgba(134,239,172,0.7)', marginTop: 1 },
-  invoiceViewBtn:        { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(34,197,94,0.2)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
-  invoiceViewBtnText:    { fontSize: 12, fontWeight: '700', color: '#86EFAC' },
+  ticketTop:      { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingTop: 14, paddingBottom: 12 },
+  ticketIcon:     { width: 42, height: 42, borderRadius: 13, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  ticketCheck: {
+    position: 'absolute', right: -3, bottom: -3, width: 16, height: 16, borderRadius: 8,
+    backgroundColor: '#16A34A', borderWidth: 2, borderColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  ticketMain:     { flex: 1 },
+  ticketOverRow:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  ticketOverline: { fontSize: 10, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.6, flexShrink: 1 },
+  ticketAmount:   { fontSize: 20, fontWeight: '900', color: '#1E1B4B', letterSpacing: -0.5, marginTop: 2 },
+  ticketDue:      { alignItems: 'center', backgroundColor: '#F5F3FF', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
+  ticketDueLabel: { fontSize: 9, fontWeight: '700', color: '#8B5CF6', textTransform: 'uppercase', letterSpacing: 0.5 },
+  ticketDueValue: { fontSize: 12, fontWeight: '800', color: '#5B21B6', marginTop: 1 },
+
+  ticketPerf:     { flexDirection: 'row', gap: 4, overflow: 'hidden', marginHorizontal: 14 },
+  ticketPerfDash: { width: 6, height: 1.5, borderRadius: 1, backgroundColor: '#E5E7EB' },
+
+  ticketBottom:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, gap: 10 },
+  ticketBreakdown: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  ticketStatus:    { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  ticketStatusText:{ fontSize: 9, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4 },
+  ticketBreakItem: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
+  ticketBreakText: { fontSize: 11, fontWeight: '600', color: '#6B7280', flexShrink: 1 },
+  ticketView:      { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  ticketViewText:  { fontSize: 13, fontWeight: '800', color: '#4F46E5' },
+  ticketViewArrow: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#4F46E5', alignItems: 'center', justifyContent: 'center' },
 
   // ── Quick stats row ──
   statsRow: { flexDirection: 'row', gap: 10 },

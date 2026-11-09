@@ -43,7 +43,7 @@ export default function GenerateInvoiceScreen() {
   const route      = useRoute<RouteProp<TenantsStackParamList, 'GenerateInvoice'>>();
   const insets     = useSafeAreaInsets();
 
-  const { tenantId, contractId, unitId, lastReading } = route.params;
+  const { tenantId, contractId, unitId, lastReading, apiInvoice } = route.params;
 
   // ── Parse API response ─────────────────────────────────────────────────────
   const apiData  = lastReading?.data ?? {};
@@ -77,8 +77,11 @@ export default function GenerateInvoiceScreen() {
   const dueDate         = billing.dueDate ?? '';
 
   // ── UI state ───────────────────────────────────────────────────────────────
-  const existingInvoice = getInvoice(String(tenantId), displayMonth);
-  const [isEditing,   setIsEditing]   = useState(!existingInvoice);
+  const storeMonth      = billingMonthApi || displayMonth; // normalised to YYYY-MM inside the store
+  const existingInvoice = getInvoice(String(tenantId), storeMonth);
+  // Invoice exists on the API but this device has no saved readings → read-only summary
+  const remoteOnly      = !!apiInvoice && !existingInvoice;
+  const [isEditing,   setIsEditing]   = useState(!existingInvoice && !apiInvoice);
   const [currKwh,     setCurrKwh]     = useState(existingInvoice ? String(existingInvoice.currKwh)   : '');
   const [currWater,   setCurrWater]   = useState(existingInvoice ? String(existingInvoice.currWater) : '');
   const [notes,       setNotes]       = useState(existingInvoice?.notes ?? '');
@@ -97,7 +100,7 @@ export default function GenerateInvoiceScreen() {
   const kwhValid   = currKwh   !== '' && kwhNum   >= prevKwh;
   const waterValid = currWater !== '' && waterNum >= prevWater;
   const isValid    = kwhValid && waterValid;
-  const isViewMode = !!existingInvoice && !isEditing;
+  const isViewMode = (!!existingInvoice || !!apiInvoice) && !isEditing;
 
   // ── Currency helpers ───────────────────────────────────────────────────────
   const fmt = (usd: number) =>
@@ -140,7 +143,7 @@ export default function GenerateInvoiceScreen() {
               await invoicesApi.create({ contractId, billingMonth: billingMonthApi });
               const totalKhr = totalUsd * exchangeRate;
               saveInvoice({
-                tenantId: String(tenantId), billingMonth: displayMonth,
+                tenantId: String(tenantId), billingMonth: storeMonth,
                 currKwh: kwhNum, currWater: waterNum, notes,
                 scheduledDate: dueDate, total: totalKhr,
                 elecCost: elecUsd * exchangeRate, waterCost: waterUsd * exchangeRate,
@@ -153,7 +156,7 @@ export default function GenerateInvoiceScreen() {
               if (e?.message?.toLowerCase().includes('duplicate') || e?.status === 400) {
                 const totalKhr = totalUsd * exchangeRate;
                 saveInvoice({
-                  tenantId: String(tenantId), billingMonth: displayMonth,
+                  tenantId: String(tenantId), billingMonth: storeMonth,
                   currKwh: kwhNum, currWater: waterNum, notes,
                   scheduledDate: dueDate, total: totalKhr,
                   elecCost: elecUsd * exchangeRate, waterCost: waterUsd * exchangeRate,
@@ -206,7 +209,7 @@ export default function GenerateInvoiceScreen() {
           <Text style={s.headerTitle}>{isViewMode ? 'View Invoice' : 'Generate Invoice'}</Text>
           <Text style={s.headerSub}>{displayMonth}</Text>
         </View>
-        {isViewMode ? (
+        {isViewMode && !remoteOnly ? (
           <TouchableOpacity style={s.editBtn} onPress={() => setIsEditing(true)} activeOpacity={0.7}>
             <Icon name="create-outline" size={15} color="#6366F1" />
             <Text style={s.editBtnText}>Edit</Text>
@@ -271,6 +274,43 @@ export default function GenerateInvoiceScreen() {
               </View>
             </View>
           </View>
+
+          {remoteOnly && apiInvoice ? (
+            <>
+              {/* ── Invoice already on the server — read-only summary ── */}
+              <Text style={s.sectionTitle}>Invoice Summary</Text>
+              <View style={s.card}>
+                <View style={s.bkRow}>
+                  <View style={[s.bkIconWrap, { backgroundColor: '#EEF2FF' }]}>
+                    <Icon name="receipt-outline" size={14} color="#6366F1" />
+                  </View>
+                  <View style={s.bkBody}>
+                    <Text style={s.bkLabel}>Invoice #{apiInvoice.id}</Text>
+                    <Text style={s.bkNote}>Status: {(apiInvoice.status ?? 'pending').replace(/^\w/, c => c.toUpperCase())}</Text>
+                  </View>
+                </View>
+                <View style={s.divider} />
+                <View style={s.bkRow}>
+                  <View style={[s.bkIconWrap, { backgroundColor: '#FEF2F2' }]}>
+                    <Icon name="time-outline" size={14} color="#DC2626" />
+                  </View>
+                  <View style={s.bkBody}>
+                    <Text style={s.bkLabel}>Due Date</Text>
+                    <Text style={s.bkNote}>{fmtDate(apiInvoice.dueDate ?? dueDate)}</Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={s.totalCard}>
+                <View style={s.totalGlow1} /><View style={s.totalGlow2} />
+                <View style={s.totalLeft}>
+                  <Text style={s.totalLabel}>Total Due</Text>
+                  <Text style={s.totalSub}>≈ {fmtUsd(apiInvoice.totalAmount / exchangeRate)}</Text>
+                </View>
+                <Text style={s.totalMain}>{fmtKhr(apiInvoice.totalAmount)}</Text>
+              </View>
+            </>
+          ) : (<>
 
           {/* ── Previous readings ── two side-by-side stat cards ── */}
           <Text style={s.sectionTitle}>Previous Readings</Text>
@@ -520,6 +560,7 @@ export default function GenerateInvoiceScreen() {
               }
             </TouchableOpacity>
           )}
+          </>)}
 
         </ScrollView>
       </KeyboardAvoidingView>

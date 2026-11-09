@@ -37,7 +37,11 @@ export type RequestsStackParamList = {
 export type TenantsStackParamList = {
   TenantsList: undefined;
   TenantDetail: { tenantId: number };
-  GenerateInvoice: { tenantId: number; contractId: number; unitId: number; lastReading?: any };
+  GenerateInvoice: {
+    tenantId: number; contractId: number; unitId: number; lastReading?: any;
+    // Invoice already saved on the API for this billing month (if any)
+    apiInvoice?: { id: number; totalAmount: number; dueDate?: string | null; status?: string; billingMonth?: string } | null;
+  };
 };
 
 const RootStack      = createStackNavigator<RootStackParamList>();
