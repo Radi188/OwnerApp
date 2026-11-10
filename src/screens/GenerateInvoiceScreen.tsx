@@ -1,51 +1,38 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ActivityIndicator,
-} from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Text, TextInput } from '../components/Text';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
-import type { TenantsStackParamList } from '../navigation/AppNavigator';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { utilityApi, invoicesApi } from '../services/api';
 import { getInvoice, saveInvoice } from '../store/invoiceStore';
+import { Button, Screen } from '../components/ui';
+import { Input } from '../components/form';
+import Segments from '../components/Segments';
+import { dayLabel } from '../i18n';
+import { colors, radius, spacing, toneColors } from '../theme';
+import { daysUntil, initials } from '../utils/format';
 
-// ─── Formatters ───────────────────────────────────────────────────────────────
-function fmtKhr(n: number): string {
-  return n.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' ៛';
-}
-function fmtUsd(n: number): string {
-  return '$' + n.toFixed(2);
-}
-function fmtDate(d: string): string {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
+// ─── Formatters ──────────────────────────────────────────────────────────────
+const fmtKhr = (n: number) => `${Math.round(n).toLocaleString('en-US')} ៛`;
+const fmtUsd = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const AVATAR_COLORS = ['#6366F1', '#0891B2', '#16A34A', '#CA8A04', '#DC2626', '#7C3AED'];
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-  return name.substring(0, 2).toUpperCase();
-}
+type Currency = 'USD' | 'KHR';
 
-// ─── Screen ───────────────────────────────────────────────────────────────────
+/**
+ * Three modes:
+ *  - create / edit: enter this month's meter readings → bulk-save readings + create the invoice
+ *  - view (local):  this device saved the readings → read-only breakdown, "Edit" to change them
+ *  - view (remote): invoice exists on the API only  → summary + link to the full invoice
+ */
 export default function GenerateInvoiceScreen() {
-  const navigation = useNavigation<any>();
-  const route      = useRoute<RouteProp<TenantsStackParamList, 'GenerateInvoice'>>();
-  const insets     = useSafeAreaInsets();
+  const { t } = useTranslation();
+  const nav = useNavigation<any>();
+  const insets = useSafeAreaInsets();
+  const { tenantId, contractId, unitId, lastReading, apiInvoice, tenantName: tenantNameParam, unitCode: unitCodeParam } = useRoute<any>().params;
 
-  const { tenantId, contractId, unitId, lastReading, apiInvoice } = route.params;
-
-  // ── Parse API response ─────────────────────────────────────────────────────
+  // ── Parse API context ──────────────────────────────────────────────────────
   const apiData  = lastReading?.data ?? {};
   const ctx      = apiData.context        ?? {};
   const elec     = apiData.electricity    ?? {};
@@ -54,119 +41,110 @@ export default function GenerateInvoiceScreen() {
   const billing  = apiData.billingInfo    ?? {};
   const settings = apiData.settings       ?? {};
 
-  const exchangeRate  = Number(settings.exchangeRate ?? 4000);
-  const prevKwh       = parseFloat(String(elec.previousReading  ?? 0));
-  const prevWater     = parseFloat(String(water.previousReading ?? 0));
-  const kwhRateUsd    = parseFloat(String(elec.pricePerUnit  ?? 0));
-  const waterRateUsd  = parseFloat(String(water.pricePerUnit ?? 0));
+  const exchangeRate = Number(settings.exchangeRate ?? 4000);
+  const prevKwh      = parseFloat(String(elec.previousReading ?? 0));
+  const prevWater    = parseFloat(String(water.previousReading ?? 0));
+  const kwhRateUsd   = parseFloat(String(elec.pricePerUnit ?? 0));
+  const waterRateUsd = parseFloat(String(water.pricePerUnit ?? 0));
 
-  // All additional fees stored as USD
-  const rentUsd       = Number(fees.rent        ?? 0);
-  const parkingUsd    = Number(fees.parking     ?? 0);
-  const internetUsd   = Number(fees.internet    ?? 0);
-  const garbageUsd    = Number(fees.garbage     ?? 0);
-  const managementUsd = Number(fees.management  ?? 0);
-  const additionalUsd = Number(fees.additional  ?? 0);
-  const fixedUsd      = rentUsd + parkingUsd + internetUsd + garbageUsd + managementUsd + additionalUsd;
+  // All additional fees are USD
+  const feeRows: { key: string; usd: number }[] = [
+    { key: 'rent',       usd: Number(fees.rent ?? 0) },
+    { key: 'management', usd: Number(fees.management ?? 0) },
+    { key: 'parking',    usd: Number(fees.parking ?? 0) },
+    { key: 'internet',   usd: Number(fees.internet ?? 0) },
+    { key: 'garbage',    usd: Number(fees.garbage ?? 0) },
+    { key: 'additional', usd: Number(fees.additional ?? 0) },
+  ];
+  const fixedUsd = feeRows.reduce((s, f) => s + f.usd, 0);
 
-  const tenantName      = ctx.tenant   ?? '';
-  const roomCode        = ctx.room     ?? '';
+  // Prefer the tenant we came from — the readings API says "No Active Tenant" when it can't resolve one
+  const ctxTenant       = /no active/i.test(String(ctx.tenant ?? '')) ? '' : ctx.tenant;
+  const tenantName      = tenantNameParam || ctxTenant || '';
+  const roomCode        = ctx.room || unitCodeParam || '';
   const propName        = ctx.property ?? '';
   const displayMonth    = billing.displayMonth ?? ctx.month ?? '';
   const billingMonthApi = billing.billingMonth ?? '';
   const dueDate         = billing.dueDate ?? '';
 
-  // ── UI state ───────────────────────────────────────────────────────────────
+  // ── State ──────────────────────────────────────────────────────────────────
   const storeMonth      = billingMonthApi || displayMonth; // normalised to YYYY-MM inside the store
   const existingInvoice = getInvoice(String(tenantId), storeMonth);
-  // Invoice exists on the API but this device has no saved readings → read-only summary
   const remoteOnly      = !!apiInvoice && !existingInvoice;
-  const [isEditing,   setIsEditing]   = useState(!existingInvoice && !apiInvoice);
-  const [currKwh,     setCurrKwh]     = useState(existingInvoice ? String(existingInvoice.currKwh)   : '');
-  const [currWater,   setCurrWater]   = useState(existingInvoice ? String(existingInvoice.currWater) : '');
-  const [notes,       setNotes]       = useState(existingInvoice?.notes ?? '');
-  const [submitting,  setSubmitting]  = useState(false);
-  const [currency,    setCurrency]    = useState<'USD' | 'KHR'>('USD');
 
-  // ── Calculations (everything in USD, convert for display) ──────────────────
-  const kwhNum     = parseFloat(currKwh)   || 0;
+  // Invoice already exists on the server and there are no local readings to show →
+  // skip this screen and open the full invoice (line items, payments, status) directly.
+  useEffect(() => {
+    if (remoteOnly && apiInvoice?.id) nav.replace('InvoiceDetail', { invoiceId: apiInvoice.id });
+  }, [remoteOnly, apiInvoice?.id, nav]);
+  const [isEditing, setIsEditing]   = useState(!existingInvoice && !apiInvoice);
+  const [currKwh, setCurrKwh]       = useState(existingInvoice ? String(existingInvoice.currKwh) : '');
+  const [currWater, setCurrWater]   = useState(existingInvoice ? String(existingInvoice.currWater) : '');
+  const [notes, setNotes]           = useState(existingInvoice?.notes ?? '');
+  const [submitting, setSubmitting] = useState(false);
+  const [currency, setCurrency]     = useState<Currency>('USD');
+  const [showNotes, setShowNotes]   = useState(!!existingInvoice?.notes);
+  const kwhRef   = useRef<TextInput>(null);
+  const waterRef = useRef<TextInput>(null);
+
+  // ── Calculations (USD; converted for display) ──────────────────────────────
+  const kwhNum     = parseFloat(currKwh) || 0;
   const waterNum   = parseFloat(currWater) || 0;
-  const usageKwh   = Math.max(0, kwhNum   - prevKwh);
+  const usageKwh   = Math.max(0, kwhNum - prevKwh);
   const usageWater = Math.max(0, waterNum - prevWater);
-  const elecUsd    = usageKwh   * kwhRateUsd;
+  const elecUsd    = usageKwh * kwhRateUsd;
   const waterUsd   = usageWater * waterRateUsd;
   const totalUsd   = fixedUsd + elecUsd + waterUsd;
 
-  const kwhValid   = currKwh   !== '' && kwhNum   >= prevKwh;
+  const kwhValid   = currKwh !== '' && kwhNum >= prevKwh;
   const waterValid = currWater !== '' && waterNum >= prevWater;
   const isValid    = kwhValid && waterValid;
   const isViewMode = (!!existingInvoice || !!apiInvoice) && !isEditing;
 
-  // ── Currency helpers ───────────────────────────────────────────────────────
-  const fmt = (usd: number) =>
-    currency === 'USD' ? fmtUsd(usd) : fmtKhr(usd * exchangeRate);
+  const fmt = (usd: number) => (currency === 'USD' ? fmtUsd(usd) : fmtKhr(usd * exchangeRate));
+  const fmtAlt = (usd: number) => (currency === 'USD' ? fmtKhr(usd * exchangeRate) : fmtUsd(usd));
 
-  const avatarColor = AVATAR_COLORS[tenantId % AVATAR_COLORS.length];
+  // ── Save ───────────────────────────────────────────────────────────────────
+  const persistLocal = () => saveInvoice({
+    tenantId: String(tenantId), billingMonth: storeMonth,
+    currKwh: kwhNum, currWater: waterNum, notes,
+    scheduledDate: dueDate, total: totalUsd * exchangeRate,
+    elecCost: elecUsd * exchangeRate, waterCost: waterUsd * exchangeRate,
+    usageKwh, usageWater,
+  });
 
-  // All fee rows — always show all, even if 0
-  const fixedFeeRows = [
-    { label: 'Room Rental',    note: 'Monthly fixed',     icon: 'home',               iconBg: '#EEF2FF', iconColor: '#6366F1', usd: rentUsd       },
-    { label: 'Management Fee', note: 'Building mgmt',     icon: 'shield-outline',     iconBg: '#F0FDF4', iconColor: '#16A34A', usd: managementUsd  },
-    { label: 'Parking Fee',    note: 'Reserved parking',  icon: 'car-outline',        iconBg: '#EFF6FF', iconColor: '#2563EB', usd: parkingUsd     },
-    { label: 'Internet Fee',   note: 'Monthly broadband', icon: 'wifi-outline',       iconBg: '#ECFEFF', iconColor: '#0891B2', usd: internetUsd    },
-    { label: 'Garbage Fee',    note: 'Waste collection',  icon: 'trash-outline',      iconBg: '#FFF7ED', iconColor: '#EA580C', usd: garbageUsd     },
-    { label: 'Additional Fee', note: 'Other charges',     icon: 'add-circle-outline', iconBg: '#F3F4F6', iconColor: '#6B7280', usd: additionalUsd  },
-  ];
-
-  // ── Submit ─────────────────────────────────────────────────────────────────
   const handleSave = () => {
     if (!isValid) return;
     Alert.alert(
-      'Confirm Invoice',
-      `Generate invoice for ${tenantName}?\n\nBilling: ${displayMonth}\nTotal: ${fmtUsd(totalUsd)} (${fmtKhr(totalUsd * exchangeRate)})`,
+      t('invoiceForm.confirmTitle'),
+      t('invoiceForm.confirmMsg', {
+        name: tenantName, month: displayMonth, usd: fmtUsd(totalUsd), khr: fmtKhr(totalUsd * exchangeRate),
+      }),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: existingInvoice ? 'Update' : 'Confirm',
+          text: existingInvoice ? t('invoiceForm.update') : t('common.confirm'),
           onPress: async () => {
             setSubmitting(true);
             try {
-              const today = new Date();
-              const readingDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-              await utilityApi.bulk({
-                unitId,
-                electricityReading: kwhNum,
-                waterReading:       waterNum,
-                readingDate,
-                note:               notes || '',
-              });
+              const d = new Date();
+              const readingDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+              await utilityApi.bulk({ unitId, electricityReading: kwhNum, waterReading: waterNum, readingDate, note: notes || '' });
               await invoicesApi.create({ contractId, billingMonth: billingMonthApi });
-              const totalKhr = totalUsd * exchangeRate;
-              saveInvoice({
-                tenantId: String(tenantId), billingMonth: storeMonth,
-                currKwh: kwhNum, currWater: waterNum, notes,
-                scheduledDate: dueDate, total: totalKhr,
-                elecCost: elecUsd * exchangeRate, waterCost: waterUsd * exchangeRate,
-                usageKwh, usageWater,
-              });
+              persistLocal();
               setIsEditing(false);
-              Alert.alert('Invoice Created', `Invoice for ${tenantName} has been generated.\nDue: ${fmtDate(dueDate)}`,
-                [{ text: 'Done', onPress: () => navigation.goBack() }]);
+              Alert.alert(
+                t('invoiceForm.createdTitle'),
+                t('invoiceForm.createdMsg', { name: tenantName, date: dayLabel(dueDate, true) }),
+                [{ text: t('common.done'), onPress: () => nav.goBack() }],
+              );
             } catch (e: any) {
               if (e?.message?.toLowerCase().includes('duplicate') || e?.status === 400) {
-                const totalKhr = totalUsd * exchangeRate;
-                saveInvoice({
-                  tenantId: String(tenantId), billingMonth: storeMonth,
-                  currKwh: kwhNum, currWater: waterNum, notes,
-                  scheduledDate: dueDate, total: totalKhr,
-                  elecCost: elecUsd * exchangeRate, waterCost: waterUsd * exchangeRate,
-                  usageKwh, usageWater,
-                });
+                persistLocal();
                 setIsEditing(false);
-                Alert.alert('Readings Saved', 'Utility readings saved. Invoice already exists for this month.',
-                  [{ text: 'Done', onPress: () => navigation.goBack() }]);
+                Alert.alert(t('invoiceForm.savedTitle'), t('invoiceForm.savedMsg'), [{ text: t('common.done'), onPress: () => nav.goBack() }]);
               } else {
-                Alert.alert('Error', e?.message ?? 'Failed to save invoice.');
+                Alert.alert(t('common.error'), e?.message ?? t('invoiceForm.saveFailed'));
               }
             } finally {
               setSubmitting(false);
@@ -177,572 +155,370 @@ export default function GenerateInvoiceScreen() {
     );
   };
 
-  // ── Currency toggle component ──────────────────────────────────────────────
-  const CurrencyToggle = () => (
-    <View style={s.toggleWrap}>
-      <TouchableOpacity
-        style={[s.toggleBtn, currency === 'USD' && s.toggleBtnActive]}
-        onPress={() => setCurrency('USD')}
-        activeOpacity={0.8}
-      >
-        <Text style={[s.toggleBtnText, currency === 'USD' && s.toggleBtnTextActive]}>$ USD</Text>
+  // ── Header & footer ────────────────────────────────────────────────────────
+  const header = (
+    <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+      <TouchableOpacity style={styles.iconBtn} onPress={() => nav.goBack()} hitSlop={6} accessibilityLabel="Back">
+        <Icon name="chevron-back" size={20} color={colors.ink} />
       </TouchableOpacity>
-      <TouchableOpacity
-        style={[s.toggleBtn, currency === 'KHR' && s.toggleBtnActive]}
-        onPress={() => setCurrency('KHR')}
-        activeOpacity={0.8}
-      >
-        <Text style={[s.toggleBtnText, currency === 'KHR' && s.toggleBtnTextActive]}>៛ KHR</Text>
-      </TouchableOpacity>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.title} numberOfLines={1}>{isViewMode ? t('invoiceForm.viewTitle') : t('invoiceForm.createTitle')}</Text>
+        {displayMonth ? <Text style={styles.subtitle} numberOfLines={1}>{displayMonth}</Text> : null}
+      </View>
+      {isViewMode && !remoteOnly ? (
+        <TouchableOpacity style={styles.iconBtn} onPress={() => setIsEditing(true)} activeOpacity={0.7} accessibilityLabel={t('invoiceForm.edit')}>
+          <Icon name="create-outline" size={19} color={colors.ink} />
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 
-  return (
-    <SafeAreaView style={s.container} edges={[]}>
+  // What still blocks the button, e.g. "Enter the Water reading to continue"
+  const missing = [
+    !kwhValid ? t('billing.electricity') : null,
+    !waterValid ? t('billing.water') : null,
+  ].filter(Boolean).join(' & ');
 
-      {/* ── Header ── */}
-      <View style={[s.header, { paddingTop: insets.top + 14 }]}>
-        <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <Icon name="chevron-back" size={22} color="#374151" />
-        </TouchableOpacity>
-        <View style={s.headerCenter}>
-          <Text style={s.headerTitle}>{isViewMode ? 'View Invoice' : 'Generate Invoice'}</Text>
-          <Text style={s.headerSub}>{displayMonth}</Text>
+  const footer = !isViewMode ? (
+    <View style={{ flex: 1 }}>
+      <View style={styles.footTotal}>
+        <View>
+          <Text style={styles.footLabel}>{t('invoiceForm.totalDue')}</Text>
+          <Text style={styles.alt}>≈ {fmtAlt(totalUsd)}</Text>
         </View>
-        {isViewMode && !remoteOnly ? (
-          <TouchableOpacity style={s.editBtn} onPress={() => setIsEditing(true)} activeOpacity={0.7}>
-            <Icon name="create-outline" size={15} color="#6366F1" />
-            <Text style={s.editBtnText}>Edit</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 62 }} />
-        )}
+        <Text style={styles.footValue} numberOfLines={1} adjustsFontSizeToFit>{fmt(totalUsd)}</Text>
       </View>
+      {!isValid ? <Text style={styles.footHint}>{t('invoiceForm.needReadings', { meters: missing })}</Text> : null}
+      <Button
+        title={existingInvoice ? t('invoiceForm.update') : t('invoiceForm.createTitle')}
+        icon="send-outline"
+        onPress={handleSave}
+        loading={submitting}
+        disabled={!isValid}
+      />
+    </View>
+  ) : undefined;
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+  const status = isViewMode ? 'saved' : 'draft';
+  const statusTc = status === 'saved' ? toneColors.success : toneColors.neutral;
+  const dueSoon = !!dueDate && daysUntil(dueDate) <= 3;
 
-          {/* ── Saved banner ── */}
-          {isViewMode && (
-            <View style={s.savedBanner}>
-              <Icon name="checkmark-circle" size={16} color="#16A34A" />
-              <Text style={s.savedBannerText}>Invoice saved for {displayMonth}</Text>
-            </View>
-          )}
-
-          {/* ── Hero card ── */}
-          <View style={s.heroCard}>
-            <View style={s.glow1} /><View style={s.glow2} /><View style={s.glow3} />
-
-            <View style={s.heroTop}>
-              <View style={[s.avatar, { backgroundColor: avatarColor }]}>
-                <Text style={s.avatarText}>{tenantName ? initials(tenantName) : '?'}</Text>
-              </View>
-              <View style={s.heroInfo}>
-                <Text style={s.heroName}>{tenantName}</Text>
-                <View style={s.heroChipRow}>
-                  {roomCode ? (
-                    <View style={s.heroChip}>
-                      <Icon name="home-outline" size={10} color="rgba(255,255,255,0.7)" />
-                      <Text style={s.heroChipText}>{roomCode}</Text>
-                    </View>
-                  ) : null}
-                  {propName ? (
-                    <View style={s.heroChip}>
-                      <Icon name="business-outline" size={10} color="rgba(255,255,255,0.7)" />
-                      <Text style={s.heroChipText}>{propName}</Text>
-                    </View>
-                  ) : null}
-                </View>
-              </View>
-            </View>
-
-            <View style={s.heroGrid}>
-              <View style={s.heroMetaItem}>
-                <Text style={s.heroMetaLabel}>Billing Month</Text>
-                <Text style={s.heroMetaValue}>{displayMonth}</Text>
-              </View>
-              <View style={s.heroMetaDivider} />
-              <View style={s.heroMetaItem}>
-                <Text style={s.heroMetaLabel}>Due Date</Text>
-                <Text style={[s.heroMetaValue, { color: '#FCA5A5' }]}>{fmtDate(dueDate)}</Text>
-              </View>
-              <View style={s.heroMetaDivider} />
-              <View style={s.heroMetaItem}>
-                <Text style={s.heroMetaLabel}>Rate</Text>
-                <Text style={[s.heroMetaValue, { color: '#93C5FD' }]}>{exchangeRate.toLocaleString()} ៛/$</Text>
-              </View>
-            </View>
-          </View>
-
-          {remoteOnly && apiInvoice ? (
-            <>
-              {/* ── Invoice already on the server — read-only summary ── */}
-              <Text style={s.sectionTitle}>Invoice Summary</Text>
-              <View style={s.card}>
-                <View style={s.bkRow}>
-                  <View style={[s.bkIconWrap, { backgroundColor: '#EEF2FF' }]}>
-                    <Icon name="receipt-outline" size={14} color="#6366F1" />
-                  </View>
-                  <View style={s.bkBody}>
-                    <Text style={s.bkLabel}>Invoice #{apiInvoice.id}</Text>
-                    <Text style={s.bkNote}>Status: {(apiInvoice.status ?? 'pending').replace(/^\w/, c => c.toUpperCase())}</Text>
-                  </View>
-                </View>
-                <View style={s.divider} />
-                <View style={s.bkRow}>
-                  <View style={[s.bkIconWrap, { backgroundColor: '#FEF2F2' }]}>
-                    <Icon name="time-outline" size={14} color="#DC2626" />
-                  </View>
-                  <View style={s.bkBody}>
-                    <Text style={s.bkLabel}>Due Date</Text>
-                    <Text style={s.bkNote}>{fmtDate(apiInvoice.dueDate ?? dueDate)}</Text>
-                  </View>
-                </View>
-              </View>
-
-              <View style={s.totalCard}>
-                <View style={s.totalGlow1} /><View style={s.totalGlow2} />
-                <View style={s.totalLeft}>
-                  <Text style={s.totalLabel}>Total Due</Text>
-                  <Text style={s.totalSub}>≈ {fmtUsd(apiInvoice.totalAmount / exchangeRate)}</Text>
-                </View>
-                <Text style={s.totalMain}>{fmtKhr(apiInvoice.totalAmount)}</Text>
-              </View>
-            </>
-          ) : (<>
-
-          {/* ── Previous readings ── two side-by-side stat cards ── */}
-          <Text style={s.sectionTitle}>Previous Readings</Text>
-          <View style={s.prevRow}>
-            {/* Electricity */}
-            <View style={s.prevCard}>
-              <View style={s.prevCardTop}>
-                <View style={[s.prevCardIconWrap, { backgroundColor: '#FEF9C3' }]}>
-                  <Icon name="flash" size={18} color="#CA8A04" />
-                </View>
-                <View style={[s.prevRatePill, { backgroundColor: '#FEF9C3' }]}>
-                  <Text style={[s.prevRateText, { color: '#92400E' }]}>{fmtUsd(kwhRateUsd)}/kWh</Text>
-                </View>
-              </View>
-              <Text style={s.prevCardReadingVal}>{prevKwh.toLocaleString()}</Text>
-              <Text style={s.prevCardUnit}>kWh</Text>
-              <Text style={s.prevCardLabel}>Electricity</Text>
-            </View>
-
-            {/* Water */}
-            <View style={s.prevCard}>
-              <View style={s.prevCardTop}>
-                <View style={[s.prevCardIconWrap, { backgroundColor: '#DBEAFE' }]}>
-                  <Icon name="water" size={18} color="#2563EB" />
-                </View>
-                <View style={[s.prevRatePill, { backgroundColor: '#DBEAFE' }]}>
-                  <Text style={[s.prevRateText, { color: '#1D4ED8' }]}>{fmtUsd(waterRateUsd)}/m³</Text>
-                </View>
-              </View>
-              <Text style={s.prevCardReadingVal}>{parseFloat(String(prevWater)).toLocaleString()}</Text>
-              <Text style={s.prevCardUnit}>m³</Text>
-              <Text style={s.prevCardLabel}>Water</Text>
-            </View>
-          </View>
-
-          {/* ── Current readings ── one card per meter ── */}
-          <Text style={s.sectionTitle}>Current Readings</Text>
-
-          {/* Electricity meter card */}
-          <View style={s.meterCard}>
-            <View style={s.meterCardHeader}>
-              <View style={[s.meterCardIconWrap, { backgroundColor: '#FEF9C3' }]}>
-                <Icon name="flash" size={16} color="#CA8A04" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={s.meterCardName}>Electricity</Text>
-                <Text style={s.meterCardPrev}>Previous: {prevKwh.toLocaleString()} kWh</Text>
-              </View>
-              <View style={s.meterUnitBadge}>
-                <Text style={s.meterUnitText}>kWh</Text>
-              </View>
-            </View>
-
-            {isViewMode ? (
-              <View style={s.meterReadonlyWrap}>
-                <Text style={s.meterReadonlyVal}>{currKwh}</Text>
-                <View style={[s.meterResult, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
-                  <Icon name="trending-up-outline" size={13} color="#16A34A" />
-                  <Text style={s.meterResultText}>Used <Text style={s.meterResultBold}>{usageKwh} kWh</Text> → {fmt(elecUsd)}</Text>
-                </View>
-              </View>
-            ) : (
-              <View style={s.meterInputWrap}>
-                <TextInput
-                  style={[s.meterInput, currKwh !== '' && !kwhValid && s.meterInputError]}
-                  placeholder="0"
-                  placeholderTextColor="#D1D5DB"
-                  keyboardType="decimal-pad"
-                  value={currKwh}
-                  onChangeText={setCurrKwh}
-                />
-                {currKwh !== '' && kwhValid && (
-                  <View style={[s.meterResult, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
-                    <Icon name="trending-up-outline" size={13} color="#16A34A" />
-                    <Text style={s.meterResultText}>Used <Text style={s.meterResultBold}>{usageKwh} kWh</Text> → {fmt(elecUsd)}</Text>
-                  </View>
-                )}
-                {currKwh !== '' && !kwhValid && (
-                  <View style={[s.meterResult, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}>
-                    <Icon name="warning-outline" size={13} color="#DC2626" />
-                    <Text style={[s.meterResultText, { color: '#DC2626' }]}>Must be ≥ <Text style={s.meterResultBold}>{prevKwh}</Text> kWh</Text>
-                  </View>
-                )}
-              </View>
-            )}
-          </View>
-
-          {/* Water meter card */}
-          <View style={s.meterCard}>
-            <View style={s.meterCardHeader}>
-              <View style={[s.meterCardIconWrap, { backgroundColor: '#DBEAFE' }]}>
-                <Icon name="water" size={16} color="#2563EB" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={s.meterCardName}>Water</Text>
-                <Text style={s.meterCardPrev}>Previous: {parseFloat(String(prevWater)).toLocaleString()} m³</Text>
-              </View>
-              <View style={s.meterUnitBadge}>
-                <Text style={s.meterUnitText}>m³</Text>
-              </View>
-            </View>
-
-            {isViewMode ? (
-              <View style={s.meterReadonlyWrap}>
-                <Text style={s.meterReadonlyVal}>{currWater}</Text>
-                <View style={[s.meterResult, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
-                  <Icon name="trending-up-outline" size={13} color="#16A34A" />
-                  <Text style={s.meterResultText}>Used <Text style={s.meterResultBold}>{usageWater.toFixed(1)} m³</Text> → {fmt(waterUsd)}</Text>
-                </View>
-              </View>
-            ) : (
-              <View style={s.meterInputWrap}>
-                <TextInput
-                  style={[s.meterInput, currWater !== '' && !waterValid && s.meterInputError]}
-                  placeholder="0"
-                  placeholderTextColor="#D1D5DB"
-                  keyboardType="decimal-pad"
-                  value={currWater}
-                  onChangeText={setCurrWater}
-                />
-                {currWater !== '' && waterValid && (
-                  <View style={[s.meterResult, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
-                    <Icon name="trending-up-outline" size={13} color="#16A34A" />
-                    <Text style={s.meterResultText}>Used <Text style={s.meterResultBold}>{usageWater.toFixed(1)} m³</Text> → {fmt(waterUsd)}</Text>
-                  </View>
-                )}
-                {currWater !== '' && !waterValid && (
-                  <View style={[s.meterResult, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}>
-                    <Icon name="warning-outline" size={13} color="#DC2626" />
-                    <Text style={[s.meterResultText, { color: '#DC2626' }]}>Must be ≥ <Text style={s.meterResultBold}>{prevWater}</Text> m³</Text>
-                  </View>
-                )}
-              </View>
-            )}
-          </View>
-
-          {/* ── Notes ── */}
-          <Text style={s.sectionTitle}>Notes</Text>
-          {isViewMode ? (
-            <View style={[s.notesReadonly, !notes && s.notesEmpty]}>
-              <Text style={notes ? s.notesText : s.notesEmptyText}>{notes || '—'}</Text>
-            </View>
-          ) : (
-            <TextInput
-              style={s.notesInput}
-              placeholder="Optional notes..."
-              placeholderTextColor="#9CA3AF"
-              value={notes}
-              onChangeText={setNotes}
-              multiline
-              maxLength={200}
-            />
-          )}
-
-          {/* ── Invoice Breakdown — always visible ── */}
-          <View style={s.breakdownHeader}>
-            <Text style={s.sectionTitle}>Invoice Breakdown</Text>
-            <CurrencyToggle />
-          </View>
-
-          {/* Fixed fees card — all rows, including zeros */}
-          <View style={s.card}>
-            {fixedFeeRows.map((row, i) => (
-              <View key={row.label}>
-                <View style={s.bkRow}>
-                  <View style={[s.bkIconWrap, { backgroundColor: row.iconBg }]}>
-                    <Icon name={row.icon} size={14} color={row.iconColor} />
-                  </View>
-                  <View style={s.bkBody}>
-                    <Text style={s.bkLabel}>{row.label}</Text>
-                    <Text style={s.bkNote}>{row.note}</Text>
-                  </View>
-                  <Text style={[s.bkAmount, row.usd === 0 && s.bkAmountZero]}>
-                    {fmt(row.usd)}
-                  </Text>
-                </View>
-                {i < fixedFeeRows.length - 1 && <View style={s.divider} />}
-              </View>
-            ))}
-          </View>
-
-          {/* Utility charges card */}
-          <View style={s.card}>
-            <View style={s.bkRow}>
-              <View style={[s.bkIconWrap, { backgroundColor: '#FEF9C3' }]}>
-                <Icon name="flash" size={14} color="#CA8A04" />
-              </View>
-              <View style={s.bkBody}>
-                <Text style={s.bkLabel}>Electricity</Text>
-                {kwhValid
-                  ? <Text style={s.bkNote}>{usageKwh} kWh × {fmtUsd(kwhRateUsd)}</Text>
-                  : <Text style={s.bkNotePending}>Pending meter reading</Text>
-                }
-              </View>
-              <Text style={[s.bkAmount, !kwhValid && s.bkAmountZero]}>{fmt(elecUsd)}</Text>
-            </View>
-            <View style={s.divider} />
-            <View style={s.bkRow}>
-              <View style={[s.bkIconWrap, { backgroundColor: '#DBEAFE' }]}>
-                <Icon name="water" size={14} color="#2563EB" />
-              </View>
-              <View style={s.bkBody}>
-                <Text style={s.bkLabel}>Water</Text>
-                {waterValid
-                  ? <Text style={s.bkNote}>{usageWater.toFixed(1)} m³ × {fmtUsd(waterRateUsd)}</Text>
-                  : <Text style={s.bkNotePending}>Pending meter reading</Text>
-                }
-              </View>
-              <Text style={[s.bkAmount, !waterValid && s.bkAmountZero]}>{fmt(waterUsd)}</Text>
-            </View>
-          </View>
-
-          {/* Total card */}
-          <View style={s.totalCard}>
-            <View style={s.totalGlow1} /><View style={s.totalGlow2} />
-            <View style={s.totalLeft}>
-              <Text style={s.totalLabel}>Total Due</Text>
-              <Text style={s.totalSub}>
-                {currency === 'USD'
-                  ? `≈ ${fmtKhr(totalUsd * exchangeRate)}`
-                  : `≈ ${fmtUsd(totalUsd)}`
-                }
-              </Text>
-            </View>
-            <Text style={s.totalMain}>{fmt(totalUsd)}</Text>
-          </View>
-
-          {/* Due date pill */}
-          <View style={s.duePill}>
-            <Icon name="time-outline" size={14} color="#DC2626" />
-            <Text style={s.dueText}>
-              Payment due by <Text style={s.dueBold}>{fmtDate(dueDate)}</Text>
+  return (
+    <Screen header={header} footer={footer} contentStyle={{ paddingTop: spacing.sm }}>
+      {/* Summary */}
+      <View style={styles.card}>
+        <View style={styles.who}>
+          <View style={styles.avatar}><Text style={styles.avatarText}>{tenantName ? initials(tenantName) : '?'}</Text></View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.name} numberOfLines={1}>{tenantName || '—'}</Text>
+            <Text style={styles.meta} numberOfLines={1}>
+              {[roomCode ? t('billing.unit', { code: roomCode }) : null, propName].filter(Boolean).join(' · ')}
             </Text>
           </View>
+          <View style={[styles.chip, { backgroundColor: statusTc.bg }]}>
+            <View style={[styles.dot, { backgroundColor: statusTc.fg }]} />
+            <Text style={[styles.chipText, { color: statusTc.fg }]}>
+              {status === 'saved' ? t('invoiceForm.saved') : t('invoiceForm.newInvoice')}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.dueLine}>
+          <Icon name="calendar-outline" size={13} color={dueSoon ? colors.danger : colors.muted} />
+          <Text style={[styles.dueText, dueSoon && { color: colors.danger }]}>
+            {t('billing.due', { date: dayLabel(dueDate, true) })}
+          </Text>
+          <Text style={styles.dueRate}>· {exchangeRate.toLocaleString()} ៛/$</Text>
+        </View>
+      </View>
 
-          {/* ── Submit ── */}
-          {!isViewMode && (
-            <TouchableOpacity
-              style={[s.submitBtn, (!isValid || submitting) && s.submitBtnDisabled]}
-              onPress={handleSave}
-              activeOpacity={0.85}
-              disabled={!isValid || submitting}
-            >
-              {submitting
-                ? <ActivityIndicator color="#FFFFFF" size="small" />
-                : <><Icon name="send-outline" size={18} color="#FFFFFF" /><Text style={s.submitBtnText}>{existingInvoice ? 'Update Invoice' : 'Generate Invoice'}</Text></>
-              }
+      {remoteOnly ? null : (
+        <>
+          {/* Meter readings */}
+          <Text style={styles.section}>{t('invoiceForm.readings')}</Text>
+          <View style={{ gap: 10 }}>
+            <MeterCard
+              icon="flash"
+              tone={toneColors.warning}
+              label={t('billing.electricity')}
+              unit="kWh"
+              prev={prevKwh}
+              rate={fmtUsd(kwhRateUsd)}
+              value={currKwh}
+              onChange={setCurrKwh}
+              editable={!isViewMode}
+              valid={kwhValid}
+              usage={usageKwh}
+              cost={fmt(elecUsd)}
+              inputRef={kwhRef}
+              autoFocus={!isViewMode && !existingInvoice}
+              returnKeyType="next"
+              onSubmit={() => waterRef.current?.focus()}
+            />
+            <MeterCard
+              icon="water"
+              tone={toneColors.info}
+              label={t('billing.water')}
+              unit="m³"
+              prev={prevWater}
+              rate={fmtUsd(waterRateUsd)}
+              value={currWater}
+              onChange={setCurrWater}
+              editable={!isViewMode}
+              valid={waterValid}
+              usage={usageWater}
+              cost={fmt(waterUsd)}
+              inputRef={waterRef}
+              returnKeyType="done"
+            />
+          </View>
+
+          {/* Notes — tucked away until needed */}
+          {isViewMode ? (
+            notes ? (
+              <>
+                <Text style={styles.section}>{t('invoiceForm.notes')}</Text>
+                <View style={styles.card}><Text style={styles.notes}>{notes}</Text></View>
+              </>
+            ) : null
+          ) : showNotes ? (
+            <>
+              <Text style={styles.section}>{t('invoiceForm.notes')}</Text>
+              <Input
+                placeholder={t('invoiceForm.notesPlaceholder')}
+                value={notes}
+                onChangeText={setNotes}
+                multiline
+                maxLength={200}
+                autoFocus={!notes}
+              />
+            </>
+          ) : (
+            <TouchableOpacity style={styles.addNote} onPress={() => setShowNotes(true)} hitSlop={8}>
+              <Icon name="add" size={16} color={colors.primary} />
+              <Text style={styles.addNoteText}>{t('invoiceForm.addNote')}</Text>
             </TouchableOpacity>
           )}
-          </>)}
 
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+          {/* Breakdown */}
+          <View style={styles.sectionRow}>
+            <Text style={[styles.section, { marginTop: 0, marginBottom: 0 }]}>{t('invoiceForm.breakdown')}</Text>
+            <Segments<Currency>
+              style={{ width: 132 }}
+              value={currency}
+              onChange={setCurrency}
+              options={[{ value: 'USD', label: '$ USD' }, { value: 'KHR', label: '៛ KHR' }]}
+            />
+          </View>
+          <View style={[styles.card, styles.flush]}>
+            {feeRows.filter(f => f.key === 'rent' || f.usd > 0).map((f, i) => (
+              <Line key={f.key} first={i === 0} label={t(`invoiceForm.fees.${f.key}`)} value={fmt(f.usd)} />
+            ))}
+            <Line
+              label={t('billing.electricity')}
+              sub={kwhValid ? `${usageKwh.toLocaleString(undefined, { maximumFractionDigits: 1 })} kWh × ${fmtUsd(kwhRateUsd)}` : t('invoiceForm.pendingReading')}
+              value={fmt(elecUsd)}
+              muted={!kwhValid}
+            />
+            <Line
+              label={t('billing.water')}
+              sub={waterValid ? `${usageWater.toLocaleString(undefined, { maximumFractionDigits: 1 })} m³ × ${fmtUsd(waterRateUsd)}` : t('invoiceForm.pendingReading')}
+              value={fmt(waterUsd)}
+              muted={!waterValid}
+            />
+            {/* While editing, the live total sits in the footer instead */}
+            {isViewMode ? (
+              <View style={styles.totalRow}>
+                <View>
+                  <Text style={styles.totalLabel}>{t('invoiceForm.totalDue')}</Text>
+                  <Text style={styles.alt}>≈ {fmtAlt(totalUsd)}</Text>
+                </View>
+                <Text style={styles.totalValue} numberOfLines={1} adjustsFontSizeToFit>{fmt(totalUsd)}</Text>
+              </View>
+            ) : null}
+          </View>
+        </>
+      )}
+    </Screen>
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F6FA' },
+// ─── Pieces ──────────────────────────────────────────────────────────────────
 
-  header: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingBottom: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F3F4F6',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04, shadowRadius: 8, elevation: 4,
+function MeterCard({
+  icon, tone, label, unit, prev, rate, value, onChange, editable, valid, usage, cost,
+  inputRef, autoFocus, returnKeyType, onSubmit,
+}: {
+  icon: string; tone: { fg: string; bg: string }; label: string; unit: string; prev: number; rate: string;
+  value: string; onChange: (v: string) => void; editable: boolean; valid: boolean; usage: number; cost: string;
+  inputRef: React.RefObject<TextInput | null>; autoFocus?: boolean; returnKeyType: 'next' | 'done'; onSubmit?: () => void;
+}) {
+  const { t } = useTranslation();
+  const [focused, setFocused] = useState(false);
+  const error = value !== '' && !valid;
+  const fmtNum = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+  return (
+    <View style={styles.meterCard}>
+      <View style={styles.meterHead}>
+        <View style={[styles.iconTile, { backgroundColor: tone.bg }]}><Icon name={icon} size={16} color={tone.fg} /></View>
+        <Text style={[styles.rowTitle, { flex: 1 }]}>{label}</Text>
+        <Text style={styles.rate}>{rate}/{unit}</Text>
+      </View>
+
+      <View style={styles.readings}>
+        <View style={styles.prevBox}>
+          <Text style={styles.boxLabel}>{t('invoiceForm.previousFull')}</Text>
+          <Text style={styles.prevValue} numberOfLines={1}>{fmtNum(prev)} <Text style={styles.boxUnit}>{unit}</Text></Text>
+        </View>
+        <Icon name="arrow-forward" size={16} color={colors.muted} />
+        {editable ? (
+          <Pressable
+            onPress={() => inputRef.current?.focus()}
+            style={[styles.currBox, focused && styles.currBoxFocus, error && styles.currBoxError]}
+          >
+            <Text style={[styles.boxLabel, focused && { color: colors.primary }, error && { color: colors.danger }]}>
+              {t('invoiceForm.current')}
+            </Text>
+            <View style={styles.currRow}>
+              <TextInput
+                ref={inputRef}
+                style={styles.currInput}
+                placeholder="—"
+                placeholderTextColor={colors.border}
+                keyboardType="decimal-pad"
+                value={value}
+                onChangeText={v => onChange(v.replace(',', '.'))}
+                onFocus={() => setFocused(true)}
+                onBlur={() => setFocused(false)}
+                autoFocus={autoFocus}
+                returnKeyType={returnKeyType}
+                onSubmitEditing={onSubmit}
+                blurOnSubmit={returnKeyType === 'done'}
+              />
+              <Text style={styles.boxUnit}>{unit}</Text>
+            </View>
+          </Pressable>
+        ) : (
+          <View style={[styles.currBox, { borderColor: colors.divider }]}>
+            <Text style={styles.boxLabel}>{t('invoiceForm.current')}</Text>
+            <Text style={styles.prevValue} numberOfLines={1}>{value || '—'} <Text style={styles.boxUnit}>{unit}</Text></Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.meterFoot}>
+        <Text
+          style={[styles.usage, { color: value === '' ? colors.muted : error ? colors.danger : colors.success }]}
+          numberOfLines={2}
+        >
+          {value === ''
+            ? t('invoiceForm.enterCurrent')
+            : error
+              ? t('invoiceForm.mustBe', { prev: fmtNum(prev), unit })
+              : t('invoiceForm.used', { usage: fmtNum(usage), unit, cost })}
+        </Text>
+        {editable && value !== String(prev) ? (
+          <TouchableOpacity style={styles.sameBtn} onPress={() => onChange(String(prev))} activeOpacity={0.7}>
+            <Text style={styles.sameText}>{t('invoiceForm.noChange')}</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function Line({ label, sub, value, muted, first }: { label: string; sub?: string; value: string; muted?: boolean; first?: boolean }) {
+  return (
+    <View style={[styles.line, !first && styles.sep]}>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.lineLabel}>{label}</Text>
+        {sub ? <Text style={[styles.rowSub, muted && { color: colors.warning }]}>{sub}</Text> : null}
+      </View>
+      <Text style={[styles.lineValue, muted && { color: colors.muted }]}>{value}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  // Header
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.bg, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  title: { fontSize: 22, fontWeight: '700', color: colors.ink, letterSpacing: -0.4 },
+  subtitle: { fontSize: 13, color: colors.textSecondary, fontWeight: '500', marginTop: 2 },
+  iconBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface,
+    borderWidth: 1, borderColor: colors.divider, alignItems: 'center', justifyContent: 'center',
   },
-  backBtn: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: '#F3F4F6',
-    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+
+  // Cards
+  card: { backgroundColor: colors.surface, borderRadius: radius.xl, padding: spacing.xl, borderWidth: 1, borderColor: colors.divider },
+  flush: { padding: 0, overflow: 'hidden' },
+  sep: { borderTopWidth: 1, borderTopColor: colors.divider },
+
+  section: { fontSize: 15, fontWeight: '700', color: colors.ink, marginTop: spacing.xl, marginBottom: 10, paddingHorizontal: 4 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xl, marginBottom: 10, paddingLeft: 4 },
+
+  // Summary
+  who: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: colors.primary, fontWeight: '700', fontSize: 15 },
+  name: { fontSize: 16, fontWeight: '700', color: colors.ink },
+  meta: { fontSize: 12, color: colors.textSecondary, marginTop: 3 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: radius.pill, paddingHorizontal: 9, paddingVertical: 4 },
+  chipText: { fontSize: 11, fontWeight: '600' },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  dueLine: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.divider },
+  dueText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  dueRate: { fontSize: 13, color: colors.muted },
+
+  alt: { fontSize: 12, color: colors.muted, marginTop: 2 },
+
+  // Rows
+  iconTile: { width: 36, height: 36, borderRadius: 10, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
+  rowTitle: { fontSize: 15, fontWeight: '600', color: colors.ink },
+  rowSub: { fontSize: 12, color: colors.textSecondary, marginTop: 3 },
+
+  // Meters
+  meterCard: { backgroundColor: colors.surface, borderRadius: radius.xl, borderWidth: 1, borderColor: colors.divider, padding: spacing.lg },
+  meterHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  rate: { fontSize: 12, fontWeight: '500', color: colors.muted },
+  readings: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
+  prevBox: { flex: 1, minWidth: 0, borderRadius: 12, backgroundColor: colors.bg, paddingHorizontal: 12, paddingVertical: 10 },
+  currBox: {
+    flex: 1, minWidth: 0, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
+    borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface,
   },
-  headerCenter: { flex: 1 },
-  headerTitle:  { fontSize: 17, fontWeight: '800', color: '#111827', letterSpacing: -0.3 },
-  headerSub:    { fontSize: 12, color: '#9CA3AF', marginTop: 1 },
-  editBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: '#EEF2FF', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+  currBoxFocus: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
+  currBoxError: { borderColor: colors.danger, backgroundColor: colors.dangerSoft },
+  boxLabel: { fontSize: 11, fontWeight: '600', color: colors.muted },
+  boxUnit: { fontSize: 12, fontWeight: '500', color: colors.muted },
+  prevValue: { fontSize: 18, fontWeight: '600', color: colors.textSecondary, marginTop: 2 },
+  currRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  currInput: { flex: 1, minWidth: 0, fontSize: 20, fontWeight: '700', color: colors.ink, paddingVertical: 0 },
+  meterFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 10, minHeight: 28 },
+  usage: { flex: 1, fontSize: 12, fontWeight: '600' },
+  sameBtn: { borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 10, paddingVertical: 5 },
+  sameText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+
+  addNote: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: spacing.lg, paddingHorizontal: 4 },
+  addNoteText: { fontSize: 13, fontWeight: '600', color: colors.primary },
+
+  // Footer
+  footTotal: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 },
+  footLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  footValue: { fontSize: 24, fontWeight: '700', color: colors.ink, letterSpacing: -0.5, flexShrink: 1 },
+  footHint: { fontSize: 12, color: colors.warning, fontWeight: '500', marginBottom: 8 },
+
+  // Notes
+  notes: { fontSize: 14, color: colors.ink, lineHeight: 20 },
+
+  // Breakdown
+  line: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: spacing.lg },
+  lineLabel: { fontSize: 14, color: colors.ink },
+  lineValue: { fontSize: 14, fontWeight: '600', color: colors.ink },
+  totalRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+    padding: spacing.lg, backgroundColor: colors.primarySoft, borderTopWidth: 1, borderTopColor: colors.primaryTint,
   },
-  editBtnText: { fontSize: 13, fontWeight: '700', color: '#6366F1' },
-
-  content: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 48, gap: 16 },
-
-  savedBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#F0FDF4', borderRadius: 14, padding: 14,
-    borderWidth: 1, borderColor: '#BBF7D0',
-  },
-  savedBannerText: { flex: 1, fontSize: 13, color: '#15803D', fontWeight: '600' },
-
-  // ── Hero card ──
-  heroCard: {
-    backgroundColor: 'rgba(49,46,129,0.90)', borderRadius: 24, padding: 20,
-    overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)',
-    shadowColor: '#312E81', shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25, shadowRadius: 20, elevation: 8,
-  },
-  glow1: { position: 'absolute', width: 180, height: 180, borderRadius: 90, backgroundColor: 'rgba(167,139,250,0.18)', top: -60,  right: -40 },
-  glow2: { position: 'absolute', width: 120, height: 120, borderRadius: 60, backgroundColor: 'rgba(99,102,241,0.15)',  bottom: -40, left: -20 },
-  glow3: { position: 'absolute', width: 70,  height: 70,  borderRadius: 35, backgroundColor: 'rgba(196,181,253,0.12)', top: 40,   left: 100  },
-
-  heroTop:      { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20 },
-  avatar:       { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  avatarText:   { fontSize: 18, fontWeight: '800', color: '#FFFFFF' },
-  heroInfo:     { flex: 1 },
-  heroName:     { fontSize: 17, fontWeight: '800', color: '#FFFFFF', letterSpacing: -0.3, marginBottom: 6 },
-  heroChipRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  heroChip:     { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  heroChipText: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.85)' },
-
-  heroGrid:        { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 14, padding: 14 },
-  heroMetaItem:    { flex: 1 },
-  heroMetaDivider: { width: StyleSheet.hairlineWidth, height: 28, backgroundColor: 'rgba(255,255,255,0.2)', marginHorizontal: 8 },
-  heroMetaLabel:   { fontSize: 10, color: 'rgba(255,255,255,0.5)', fontWeight: '600', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.3 },
-  heroMetaValue:   { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
-
-  sectionTitle: { fontSize: 16, fontWeight: '800', color: '#111827', letterSpacing: -0.3 },
-
-  // ── Breakdown header row with currency toggle ──
-  breakdownHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  toggleWrap:      { flexDirection: 'row', backgroundColor: '#F3F4F6', borderRadius: 10, padding: 3 },
-  toggleBtn:       { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 8 },
-  toggleBtnActive: { backgroundColor: '#6366F1', shadowColor: '#6366F1', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 3 },
-  toggleBtnText:   { fontSize: 12, fontWeight: '700', color: '#9CA3AF' },
-  toggleBtnTextActive: { color: '#FFFFFF' },
-
-  card: {
-    backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
-  },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#F3F4F6', marginHorizontal: 16 },
-
-  // ── Previous readings — two side-by-side cards ──
-  prevRow: { flexDirection: 'row', gap: 12 },
-  prevCard: {
-    flex: 1, backgroundColor: '#FFFFFF', borderRadius: 18, padding: 16,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
-  },
-  prevCardTop:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
-  prevCardIconWrap: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  prevRatePill:     { borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4 },
-  prevRateText:     { fontSize: 10, fontWeight: '700' },
-  prevCardReadingVal: { fontSize: 28, fontWeight: '900', color: '#111827', letterSpacing: -1 },
-  prevCardUnit:     { fontSize: 12, fontWeight: '600', color: '#9CA3AF', marginTop: 2, marginBottom: 6 },
-  prevCardLabel:    { fontSize: 11, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.4 },
-
-  // ── Current readings — individual meter cards ──
-  meterCard: {
-    backgroundColor: '#FFFFFF', borderRadius: 18, padding: 18,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
-  },
-  meterCardHeader:  { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-  meterCardIconWrap:{ width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  meterCardName:    { fontSize: 15, fontWeight: '800', color: '#111827' },
-  meterCardPrev:    { fontSize: 11, color: '#9CA3AF', fontWeight: '500', marginTop: 2 },
-  meterUnitBadge:   { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5, flexShrink: 0 },
-  meterUnitText:    { fontSize: 12, fontWeight: '800', color: '#6B7280' },
-
-  meterInputWrap:   { gap: 10 },
-  meterInput: {
-    backgroundColor: '#F9FAFB', borderRadius: 14, borderWidth: 1.5, borderColor: '#E5E7EB',
-    paddingHorizontal: 18, paddingVertical: 16,
-    fontSize: 34, fontWeight: '900', color: '#111827', letterSpacing: -1,
-    textAlign: 'center',
-  },
-  meterInputError:  { borderColor: '#FCA5A5', backgroundColor: '#FEF2F2' },
-  meterReadonlyWrap:{ gap: 10 },
-  meterReadonlyVal: {
-    fontSize: 34, fontWeight: '900', color: '#111827', letterSpacing: -1,
-    backgroundColor: '#F3F4F6', borderRadius: 14, paddingHorizontal: 18, paddingVertical: 16,
-    textAlign: 'center',
-  },
-  meterResult: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
-    borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 9,
-  },
-  meterResultText: { fontSize: 12, color: '#374151', fontWeight: '500', flex: 1 },
-  meterResultBold: { fontWeight: '800', color: '#111827' },
-
-  // ── Notes ──
-  notesInput: {
-    backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB',
-    paddingHorizontal: 14, paddingVertical: 12,
-    fontSize: 14, color: '#111827', minHeight: 88, textAlignVertical: 'top',
-  },
-  notesReadonly:  { backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', paddingHorizontal: 14, paddingVertical: 12, minHeight: 52 },
-  notesEmpty:     { backgroundColor: '#F9FAFB' },
-  notesText:      { fontSize: 14, color: '#374151', lineHeight: 20 },
-  notesEmptyText: { fontSize: 14, color: '#D1D5DB' },
-
-  // ── Breakdown rows ──
-  bkRow:          { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
-  bkIconWrap:     { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  bkBody:         { flex: 1 },
-  bkLabel:        { fontSize: 13, fontWeight: '700', color: '#374151' },
-  bkNote:         { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
-  bkNotePending:  { fontSize: 11, color: '#D97706', marginTop: 2, fontWeight: '600' },
-  bkAmount:       { fontSize: 13, fontWeight: '800', color: '#111827', flexShrink: 0 },
-  bkAmountZero:   { color: '#D1D5DB' },
-
-  // ── Total card ──
-  totalCard: {
-    backgroundColor: '#5B21B6', borderRadius: 20, padding: 20,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    overflow: 'hidden',
-    shadowColor: '#312E81', shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3, shadowRadius: 16, elevation: 8,
-  },
-  totalGlow1: { position: 'absolute', width: 140, height: 140, borderRadius: 70, backgroundColor: 'rgba(167,139,250,0.2)', top: -50, right: -30 },
-  totalGlow2: { position: 'absolute', width: 80,  height: 80,  borderRadius: 40, backgroundColor: 'rgba(99,102,241,0.2)',  bottom: -30, left: 40 },
-  totalLeft:  { gap: 4 },
-  totalLabel: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: 0.5 },
-  totalSub:   { fontSize: 12, fontWeight: '600', color: 'rgba(255,255,255,0.45)' },
-  totalMain:  { fontSize: 26, fontWeight: '900', color: '#FFFFFF', letterSpacing: -0.5 },
-
-  // ── Due pill ──
-  duePill: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#FEF2F2', borderRadius: 12, padding: 14,
-    borderWidth: 1, borderColor: '#FECACA',
-  },
-  dueText: { flex: 1, fontSize: 13, color: '#374151' },
-  dueBold: { fontWeight: '800', color: '#DC2626' },
-
-  // ── Submit ──
-  submitBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 10, backgroundColor: '#6366F1', borderRadius: 16, paddingVertical: 17,
-  },
-  submitBtnDisabled: { backgroundColor: '#C7D2FE' },
-  submitBtnText:     { fontSize: 16, fontWeight: '800', color: '#FFFFFF' },
+  totalLabel: { fontSize: 14, fontWeight: '700', color: colors.primaryDark },
+  totalValue: { fontSize: 24, fontWeight: '700', color: colors.primaryDark, letterSpacing: -0.5, flexShrink: 1 },
 });

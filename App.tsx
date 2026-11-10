@@ -69,7 +69,7 @@ export default function App() {
       <AuthProvider>
         <BadgeProvider>
           <View style={styles.root}>
-            <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent={false} />
+            <StatusBar barStyle="dark-content" backgroundColor="#F4F6F8" translucent={false} />
             <AppNavigator />
             <QuickLoginModal />
             <PushNotificationSetup />
@@ -81,5 +81,5 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#6366F1' },
+  root: { flex: 1, backgroundColor: '#F4F6F8' },
 });

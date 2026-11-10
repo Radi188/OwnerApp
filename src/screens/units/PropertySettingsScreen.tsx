@@ -1,0 +1,298 @@
+import React, { useEffect, useState } from 'react';
+import { Alert, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import Icon from 'react-native-vector-icons/Ionicons';
+import { useTranslation } from 'react-i18next';
+import { Text } from '../../components/Text';
+import { useNavigation } from '@react-navigation/native';
+import { chargesApi, num, pickList, pickOne, propertiesApi } from '../../services/api';
+import type { PropertyCharge } from '../../services/types';
+import { Sheet } from '../../components/Sheet';
+import { Input } from '../../components/form';
+import { useAuth } from '../../context/AuthContext';
+import { useApi } from '../../hooks/useApi';
+import { numeric, required, useForm } from '../../hooks/useForm';
+import { Button, Card, ErrorView, Header, LoadingView, Screen, SelectField, SwitchRow, TextField } from '../../components/ui';
+import { colors, font, radius, spacing } from '../../theme';
+import { errMsg, money } from '../../utils/format';
+
+const TYPES = ['Apartment', 'Room Rental', 'Shop House', 'Villa', 'Land'].map(v => ({ label: v, value: v }));
+const STATUSES = ['Active', 'Maintenance'].map(v => ({ label: v, value: v }));
+const s = (v: any) => (v == null ? '' : String(v));
+
+const EMPTY = {
+  name: '', type: 'Apartment', status: 'Active', address: '', description: '', ownerName: '', ownerPhone: '',
+  numberOfFloors: '', totalUnits: '', electricityPricePerKwh: '', waterPricePerM3: '', exchangeRate: '',
+  billingDay: '1', dueDay: '5', reminderBeforeDueDays: '1', bankName: '', bankAccountName: '', bankAccountNumber: '',
+  // Tenancy defaults for move-in / move-out (booleans kept as 'true' / 'false' strings; multipart accepts both)
+  defaultBillingStrategy: 'anniversary', defaultMoveOutRentMode: 'prorated', dailyRateBasis: 'actual',
+  autoApplyDeposit: 'false', refundUnusedDays: 'false',
+};
+
+export default function PropertySettingsScreen() {
+  const { t } = useTranslation();
+  const nav = useNavigation<any>();
+  const { propertyId, can, switchProperty } = useAuth();
+  const canEdit = can('edit', 'property');
+
+  const { data, loading, error, refresh } = useApi(
+    async () => (propertyId ? pickOne<any>(await propertiesApi.get(propertyId), 'properties', 'property') : null),
+    [propertyId],
+    { refetchOnFocus: false },
+  );
+
+  const f = useForm(EMPTY, {
+    name: required('Name'),
+    numberOfFloors: numeric('Floors'),
+    totalUnits: numeric('Total units'),
+    electricityPricePerKwh: numeric('Electricity price'),
+    waterPricePerM3: numeric('Water price'),
+    exchangeRate: numeric('Exchange rate'),
+    billingDay: numeric('Billing day'),
+    dueDay: numeric('Due day'),
+    reminderBeforeDueDays: numeric('Reminder days'),
+  });
+
+  useEffect(() => {
+    if (!data) return;
+    const next: any = {};
+    (Object.keys(EMPTY) as (keyof typeof EMPTY)[]).forEach(k => {
+      const v = data[k];
+      next[k] = v == null || v === 'null' ? EMPTY[k] : s(v);
+    });
+    f.setValues(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  const save = f.submit(async v => {
+    if (!propertyId) throw new Error('No property selected');
+    await propertiesApi.update(propertyId, v);
+    // Keep the header name in sync if it was renamed
+    if (data?.name !== v.name) await switchProperty(propertyId, v.name).catch(() => {});
+  }, () => { Alert.alert('Saved', 'Property settings updated.'); nav.goBack(); });
+
+  const fld = (key: keyof typeof EMPTY, label: string, extra: any = {}) => (
+    <TextField label={label} editable={canEdit} {...f.field(key)} {...extra} />
+  );
+
+  return (
+    <Screen
+      header={<Header title="Property settings" subtitle={data?.name} />}
+      footer={canEdit && data ? <Button title="Save settings" onPress={save} loading={f.submitting} style={{ flex: 1 }} /> : undefined}
+    >
+      {loading ? <LoadingView /> : error || !data ? <ErrorView message={error ?? 'Select a property first'} onRetry={refresh} /> : (
+        <>
+          <Card>
+            <Text style={styles.section}>General</Text>
+            {fld('name', 'Property name', { required: true })}
+            <SelectField label="Type" icon="business-outline" value={f.values.type} options={TYPES} onChange={v => f.set('type', v)} disabled={!canEdit} />
+            <SelectField label="Status" value={f.values.status} options={STATUSES} onChange={v => f.set('status', v)} disabled={!canEdit} />
+            {fld('address', 'Address')}
+            {fld('description', 'Description', { multiline: true })}
+            <View style={styles.row}>
+              <View style={styles.half}>{fld('numberOfFloors', 'Floors', { keyboardType: 'number-pad' })}</View>
+              <View style={styles.half}>{fld('totalUnits', 'Total units', { keyboardType: 'number-pad' })}</View>
+            </View>
+          </Card>
+
+          <Card style={styles.gap}>
+            <Text style={styles.section}>Owner</Text>
+            {fld('ownerName', 'Owner name')}
+            {fld('ownerPhone', 'Owner phone', { keyboardType: 'phone-pad' })}
+          </Card>
+
+          <Card style={styles.gap}>
+            <Text style={styles.section}>Utility rates & currency</Text>
+            <View style={styles.row}>
+              <View style={styles.half}>{fld('electricityPricePerKwh', 'Electricity / kWh', { keyboardType: 'decimal-pad', prefix: '$' })}</View>
+              <View style={styles.half}>{fld('waterPricePerM3', 'Water / m³', { keyboardType: 'decimal-pad', prefix: '$' })}</View>
+            </View>
+            {fld('exchangeRate', 'Exchange rate (KHR per USD)', { keyboardType: 'number-pad', prefix: '៛' })}
+          </Card>
+
+          <Card style={styles.gap}>
+            <Text style={styles.section}>Billing cycle</Text>
+            <View style={styles.row}>
+              <View style={styles.third}>{fld('billingDay', 'Billing day', { keyboardType: 'number-pad' })}</View>
+              <View style={styles.third}>{fld('dueDay', 'Due day', { keyboardType: 'number-pad' })}</View>
+              <View style={styles.third}>{fld('reminderBeforeDueDays', 'Remind (days)', { keyboardType: 'number-pad' })}</View>
+            </View>
+            {/* Anniversary tenants get the same grace period unified tenants get between billingDay and dueDay */}
+            {num(f.values.dueDay) > num(f.values.billingDay) ? (
+              <Text style={styles.hint}>{t('propertySettings.graceHint', { count: num(f.values.dueDay) - num(f.values.billingDay) })}</Text>
+            ) : null}
+          </Card>
+
+          <Card style={styles.gap}>
+            <Text style={styles.section}>{t('propertySettings.tenancy')}</Text>
+            <Text style={[styles.hint, { marginTop: -6, marginBottom: 12 }]}>{t('propertySettings.tenancyHint')}</Text>
+            <SelectField
+              label={t('propertySettings.howPay')}
+              variant="sheet"
+              value={f.values.defaultBillingStrategy}
+              disabled={!canEdit}
+              onChange={v => f.set('defaultBillingStrategy', v)}
+              options={(['anniversary', 'unified'] as const).map(v => ({ value: v, label: t(`tenancy.billing.${v}`), subtitle: t(`tenancy.billingHint.${v}`) }))}
+            />
+            <SelectField
+              label={t('propertySettings.extraDays')}
+              variant="sheet"
+              value={f.values.defaultMoveOutRentMode}
+              disabled={!canEdit}
+              onChange={v => f.set('defaultMoveOutRentMode', v)}
+              options={(['prorated', 'full', 'none'] as const).map(v => ({ value: v, label: t(`tenancy.rentMode.${v}`) }))}
+            />
+            <SelectField
+              label={t('propertySettings.dailyRate')}
+              variant="sheet"
+              value={f.values.dailyRateBasis}
+              disabled={!canEdit}
+              onChange={v => f.set('dailyRateBasis', v)}
+              options={(['actual', 'fixed30'] as const).map(v => ({ value: v, label: t(`tenancy.rate.${v}`) }))}
+            />
+            <SwitchRow
+              label={t('tenancy.applyDeposit')}
+              value={f.values.autoApplyDeposit === 'true'}
+              onChange={v => canEdit && f.set('autoApplyDeposit', v ? 'true' : 'false')}
+            />
+            <SwitchRow
+              label={t('tenancy.refundUnused')}
+              value={f.values.refundUnusedDays === 'true'}
+              onChange={v => canEdit && f.set('refundUnusedDays', v ? 'true' : 'false')}
+            />
+          </Card>
+
+          {propertyId ? <ChargesCard propertyId={propertyId} canEdit={canEdit} /> : null}
+
+          <Card style={styles.gap}>
+            <Text style={styles.section}>Bank account</Text>
+            {fld('bankName', 'Bank name')}
+            {fld('bankAccountName', 'Account name')}
+            {fld('bankAccountNumber', 'Account number', { keyboardType: 'number-pad' })}
+            <Text style={font.caption}>Logo and payment QR code can be uploaded from the web dashboard.</Text>
+          </Card>
+        </>
+      )}
+    </Screen>
+  );
+}
+
+// ─── Property charges (added to every tenant's invoice) ─────────────────────
+
+function ChargesCard({ propertyId, canEdit }: { propertyId: number; canEdit: boolean }) {
+  const { t } = useTranslation();
+  const charges = useApi(async () => pickList<PropertyCharge>(await chargesApi.list(propertyId), 'charges'), [propertyId]);
+  const [editing, setEditing] = useState<Partial<PropertyCharge> | null>(null);
+  const [name, setName] = useState('');
+  const [amount, setAmount] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const open = (c: Partial<PropertyCharge>) => {
+    setEditing(c);
+    setName(c.name ?? '');
+    setAmount(c.amount != null ? String(num(c.amount)) : '');
+  };
+
+  const run = async (fn: () => Promise<unknown>) => {
+    try { await fn(); await charges.reload(); } catch (e) { Alert.alert(t('common.error'), errMsg(e)); }
+  };
+
+  const save = async () => {
+    if (!editing || !name.trim() || amount === '' || num(amount) < 0) return;
+    setSaving(true);
+    await run(() => (editing.id
+      ? chargesApi.update(propertyId, editing.id, { name: name.trim(), amount: num(amount) })
+      : chargesApi.create(propertyId, { name: name.trim(), amount: num(amount), isActive: true })));
+    setSaving(false);
+    setEditing(null);
+  };
+
+  const remove = (c: PropertyCharge) => Alert.alert(t('propertySettings.deleteCharge'), t('propertySettings.deleteChargeMsg', { name: c.name }), [
+    { text: t('common.cancel'), style: 'cancel' },
+    { text: t('unitDetail.delete'), style: 'destructive', onPress: () => run(() => chargesApi.remove(propertyId, c.id)) },
+  ]);
+
+  const list = charges.data ?? [];
+
+  return (
+    <Card style={styles.gap}>
+      <View style={styles.chargeHead}>
+        <Text style={[styles.section, { marginBottom: 0, flex: 1 }]}>{t('propertySettings.charges')}</Text>
+        {canEdit ? (
+          <TouchableOpacity onPress={() => open({})} hitSlop={8} style={styles.addBtn}>
+            <Icon name="add" size={16} color={colors.primary} />
+            <Text style={styles.addText}>{t('propertySettings.addCharge')}</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+      <Text style={[styles.hint, { marginBottom: 10 }]}>{t('propertySettings.chargesHint')}</Text>
+
+      {charges.loading ? null : list.length === 0 ? (
+        <Text style={styles.emptyCharges}>{t('propertySettings.noCharges')}</Text>
+      ) : list.map((c, i) => (
+        <Pressable
+          key={c.id}
+          onPress={() => canEdit && open(c)}
+          onLongPress={() => canEdit && remove(c)}
+          style={({ pressed }) => [styles.chargeRow, i > 0 && styles.chargeSep, pressed && { opacity: 0.7 }]}
+        >
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.chargeName, !c.isActive && { color: colors.muted }]} numberOfLines={1}>{c.name}</Text>
+            <Text style={styles.chargeAmount}>{money(c.amount, { decimals: 2 })}{!c.isActive ? ` · ${t('propertySettings.paused')}` : ''}</Text>
+          </View>
+          <SwitchToggle
+            value={!!c.isActive}
+            disabled={!canEdit}
+            onChange={v => run(() => chargesApi.update(propertyId, c.id, { isActive: v }))}
+          />
+        </Pressable>
+      ))}
+
+      <Sheet
+        visible={!!editing}
+        onClose={() => setEditing(null)}
+        title={editing?.id ? t('propertySettings.editCharge') : t('propertySettings.addCharge')}
+        footer={
+          <View style={{ gap: 10 }}>
+            <Button title={t('propertySettings.saveCharge')} onPress={save} loading={saving} disabled={!name.trim() || amount === ''} />
+            {editing?.id ? (
+              <Button title={t('propertySettings.deleteCharge')} variant="danger" icon="trash-outline"
+                onPress={() => { const c = editing as PropertyCharge; setEditing(null); remove(c); }} />
+            ) : null}
+          </View>
+        }
+      >
+        <Input label={t('propertySettings.chargeName')} placeholder="Internet" value={name} onChangeText={setName} />
+        <Input label={t('payment.amount')} prefix="$" keyboardType="decimal-pad" value={amount} onChangeText={setAmount} hint={t('propertySettings.chargeAmountHint')} />
+      </Sheet>
+    </Card>
+  );
+}
+
+/** Compact toggle (the SwitchRow without its label). */
+function SwitchToggle({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <Pressable onPress={() => !disabled && onChange(!value)} hitSlop={8} style={[styles.toggle, value && styles.toggleOn, disabled && { opacity: 0.5 }]}>
+      <View style={[styles.knob, value && { transform: [{ translateX: 18 }] }]} />
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  section: { ...font.h3, marginBottom: spacing.md },
+  hint: { fontSize: 12, color: colors.muted, lineHeight: 17 },
+  chargeHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  addBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  addText: { fontSize: 13, fontWeight: '600', color: colors.primary },
+  emptyCharges: { fontSize: 13, color: colors.muted, paddingVertical: 8 },
+  chargeRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11 },
+  chargeSep: { borderTopWidth: 1, borderTopColor: colors.divider },
+  chargeName: { fontSize: 15, fontWeight: '600', color: colors.ink },
+  chargeAmount: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  toggle: { width: 46, height: 28, borderRadius: radius.pill, backgroundColor: colors.border, padding: 3 },
+  toggleOn: { backgroundColor: colors.primary },
+  knob: { width: 22, height: 22, borderRadius: 11, backgroundColor: colors.white },
+  row: { flexDirection: 'row', gap: 12 },
+  half: { flex: 1 },
+  third: { flex: 1 },
+  gap: { marginTop: spacing.lg },
+});

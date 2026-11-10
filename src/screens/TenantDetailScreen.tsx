@@ -1,110 +1,71 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
+  ActivityIndicator,
   Alert,
   Linking,
-  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Text } from '../components/Text';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
-import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
-import type { TenantsStackParamList } from '../navigation/AppNavigator';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
-import { tenantsApi, maintenanceApi, utilityApi } from '../services/api';
-import { getInvoice, hydrateInvoices, currentMonthKey, monthKey } from '../store/invoiceStore';
+import { useAuth } from '../context/AuthContext';
+import { confirmAction, LoadingView, ProgressBar, Screen } from '../components/ui';
+import Segments from '../components/Segments';
+import TenantCredentialsSheet from '../components/TenantCredentialsSheet';
+import type { TenantCredentials } from '../services/types';
+import { dayLabel, monthLabel, statusLabel } from '../i18n';
+import { maintenanceApi, pickList, tenantsApi, utilityApi } from '../services/api';
+import { currentMonthKey, getInvoice, hydrateInvoices, monthKey } from '../store/invoiceStore';
+import { colors, radius, spacing, statusTone, toneColors } from '../theme';
+import { daysUntil, initials, money, riel, thisMonthYM, timeAgo, toNum } from '../utils/format';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-type InvoiceRange    = 'last_month' | '3_months' | '6_months' | '1_year';
-type InvoiceStatus   = 'draft' | 'pending' | 'partial' | 'paid' | 'overdue';
-type MaintenanceStatus = 'pending' | 'assigned' | 'in_progress' | 'completed';
+type Section = 'overview' | 'invoices' | 'requests';
+type InvoiceRange = 'last_month' | '3_months' | '6_months' | '1_year';
 
-const INVOICE_RANGES: { key: InvoiceRange; label: string }[] = [
-  { key: 'last_month', label: '1M' },
-  { key: '3_months',   label: '3M' },
-  { key: '6_months',   label: '6M' },
-  { key: '1_year',     label: '1Y' },
+const RANGES: { value: InvoiceRange; key: string }[] = [
+  { value: 'last_month', key: 'range1m' },
+  { value: '3_months', key: 'range3m' },
+  { value: '6_months', key: 'range6m' },
+  { value: '1_year', key: 'range1y' },
 ];
 
-const INVOICE_STATUS_META: Record<InvoiceStatus, { label: string; color: string; bg: string; icon: string }> = {
-  paid:    { label: 'Paid',    color: '#16A34A', bg: '#DCFCE7', icon: 'checkmark-circle' },
-  partial: { label: 'Partial', color: '#2563EB', bg: '#DBEAFE', icon: 'time' },
-  pending: { label: 'Pending', color: '#D97706', bg: '#FEF9C3', icon: 'time-outline' },
-  overdue: { label: 'Overdue', color: '#DC2626', bg: '#FEF2F2', icon: 'alert-circle' },
-  draft:   { label: 'Draft',   color: '#9CA3AF', bg: '#F3F4F6', icon: 'document-outline' },
-};
+const isActiveStatus = (s?: string) => String(s ?? '').toLowerCase() === 'active';
+const isUrgent = (m: any) => ['urgent', 'high'].includes(String(m.priority ?? '').toLowerCase());
 
-const MAINTENANCE_STATUS: Record<MaintenanceStatus, { label: string; color: string; bg: string }> = {
-  pending:     { label: 'Pending',     color: '#6366F1', bg: '#EEF2FF' },
-  assigned:    { label: 'Assigned',    color: '#7C3AED', bg: '#EDE9FE' },
-  in_progress: { label: 'In Progress', color: '#2563EB', bg: '#DBEAFE' },
-  completed:   { label: 'Completed',   color: '#16A34A', bg: '#DCFCE7' },
-};
-
-const AVATAR_COLORS = ['#6366F1', '#0891B2', '#16A34A', '#CA8A04', '#DC2626', '#7C3AED'];
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-  return name.substring(0, 2).toUpperCase();
-}
-function fmtDate(d: string | null | undefined): string {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
-function fmtMonth(ym: string): string {
-  const [y, m] = ym.split('-');
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return `${months[parseInt(m, 10) - 1]} ${y}`;
-}
-function fmtMoney(n: number): string {
-  return n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M ៛' : n.toLocaleString() + ' ៛';
-}
-function fmtKhr(n: number): string {
-  return Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') + ' ៛';
-}
-function fmtShortDate(d: string | null | undefined): string {
-  if (!d) return '';
-  const date = new Date(d);
-  return isNaN(date.getTime()) ? '' : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-function currentBillingMonth(): string {
-  return new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' });
+/** Share of the contract term already elapsed (0–1). */
+function termProgress(start?: string, end?: string): number {
+  const s = start ? new Date(start).getTime() : NaN;
+  const e = end ? new Date(end).getTime() : NaN;
+  if (isNaN(s) || isNaN(e) || e <= s) return 0;
+  return Math.min(1, Math.max(0, (Date.now() - s) / (e - s)));
 }
 
-// ─── Screen ───────────────────────────────────────────────────────────────────
 export default function TenantDetailScreen() {
-  const navigation = useNavigation<any>();
-  const route      = useRoute<RouteProp<TenantsStackParamList, 'TenantDetail'>>();
-  const insets     = useSafeAreaInsets();
-  const { t }      = useTranslation();
-  const tenantId   = route.params.tenantId;
+  const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
+  const nav = useNavigation<any>();
+  const tenantId: number = useRoute<any>().params.tenantId;
+  const { can } = useAuth();
 
-  const [tenant,          setTenant]          = useState<any>(null);
-  const [maintenance,     setMaintenance]     = useState<any[]>([]);
-  const [invoices,        setInvoices]        = useState<any[]>([]);
-  const [invoiceRange,    setInvoiceRange]    = useState<InvoiceRange>('3_months');
+  const [tenant, setTenant] = useState<any>(null);
+  const [maintenance, setMaintenance] = useState<any[]>([]);
+  const [invoices, setInvoices] = useState<any[]>([]);
+  const [range, setRange] = useState<InvoiceRange>('3_months');
   const [invoicesLoading, setInvoicesLoading] = useState(false);
-  const [loading,         setLoading]         = useState(true);
-  const [invoiceBtnLoading, setInvoiceBtnLoading] = useState(false);
-  // This month's invoice as saved on the API (source of truth for "generated")
-  const [currentInvoice,  setCurrentInvoice]  = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [currentInvoice, setCurrentInvoice] = useState<any>(null);
+  const [section, setSection] = useState<Section>('overview');
+  const [newLogin, setNewLogin] = useState<TenantCredentials | null>(null);
 
-  const billingMonth     = currentBillingMonth();
-  const invoiceRecord    = getInvoice(String(tenantId), currentMonthKey()); // local extras: readings, breakdown
-  const invoiceGenerated = !!currentInvoice || !!invoiceRecord;
+  // Local extras saved by Generate Invoice (readings + KHR breakdown)
+  const invoiceRecord = getInvoice(String(tenantId), currentMonthKey());
 
   const loadData = useCallback(async () => {
     try {
@@ -114,712 +75,586 @@ export default function TenantDetailScreen() {
         tenantsApi.invoices(tenantId, '3_months').catch(() => null),
         hydrateInvoices(),
       ]);
-      const thisMonth = currentMonthKey();
       const apiInvoices: any[] = invRes?.data?.invoices ?? [];
-      setCurrentInvoice(apiInvoices.find(inv => monthKey(inv.billingMonth) === thisMonth) ?? null);
-      const t = tenantRes?.data?.tenants ?? tenantRes?.data?.tenant ?? null;
-      setTenant(t);
-      const tenantContracts: any[] = t?.contracts ?? [];
-      const unitIds = new Set(tenantContracts.map((c: any) => c.unitId));
-      const allMnt: any[] = mntRes?.data?.maintenances ?? [];
-      setMaintenance(allMnt.filter(m => unitIds.has(m.unitId)).slice(0, 10));
+      setCurrentInvoice(apiInvoices.find(inv => monthKey(inv.billingMonth) === currentMonthKey()) ?? null);
+      const tn = tenantRes?.data?.tenants ?? tenantRes?.data?.tenant ?? null;
+      setTenant(tn);
+      const unitIds = new Set((tn?.contracts ?? []).map((c: any) => c.unitId));
+      const all: any[] = pickList(mntRes, 'maintenanceRequests', 'maintenances');
+      setMaintenance(all.filter(m => unitIds.has(m.unitId)).slice(0, 20));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [tenantId]);
 
-  const loadInvoices = useCallback(async (range: InvoiceRange) => {
+  const loadInvoices = useCallback(async (r: InvoiceRange) => {
     setInvoicesLoading(true);
     try {
-      const res = await tenantsApi.invoices(tenantId, range).catch(() => null);
+      const res = await tenantsApi.invoices(tenantId, r).catch(() => null);
       setInvoices(res?.data?.invoices ?? []);
     } finally {
       setInvoicesLoading(false);
     }
   }, [tenantId]);
 
-  // Reload whenever the screen regains focus (e.g. coming back after generating an invoice)
+  // Reload on focus (e.g. after generating an invoice or editing the tenant)
   useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
-  useEffect(() => { loadInvoices(invoiceRange); }, [invoiceRange, loadInvoices]);
+  useEffect(() => { loadInvoices(range); }, [range, loadInvoices]);
 
-  // ── Skeleton header (shared by loading/error states) ──────────────────────
-  const PageHeader = ({ right }: { right?: React.ReactNode }) => (
-    <View style={[s.header, { paddingTop: insets.top + 14 }]}>
-      <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-        <Icon name="chevron-back" size={22} color="#374151" />
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadData();
+    loadInvoices(range);
+  };
+
+  const header = (
+    <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+      <TouchableOpacity style={styles.iconBtn} onPress={() => nav.goBack()} hitSlop={6} accessibilityLabel="Back">
+        <Icon name="chevron-back" size={20} color={colors.ink} />
       </TouchableOpacity>
-      <Text style={s.headerTitle}>Tenant Detail</Text>
-      {right ?? <View style={{ width: 36 }} />}
+      <Text style={[styles.title, { flex: 1 }]} numberOfLines={1}>{t('tenantView.title')}</Text>
+      {tenant && can('edit', 'tenant') ? (
+        <TouchableOpacity
+          style={styles.iconBtn}
+          onPress={() => nav.navigate('TenantForm', { tenant })}
+          activeOpacity={0.7}
+          accessibilityLabel={t('tenantView.edit')}
+        >
+          <Icon name="create-outline" size={19} color={colors.ink} />
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 
-  if (loading) {
+  if (loading || !tenant) {
     return (
-      <SafeAreaView style={s.container} edges={[]}>
-        <PageHeader />
-        <ActivityIndicator color="#6366F1" style={{ marginTop: 60 }} />
-      </SafeAreaView>
+      <Screen header={header}>
+        {loading ? <LoadingView /> : (
+          <View style={styles.notFound}>
+            <Icon name="person-outline" size={32} color={colors.muted} />
+            <Text style={styles.muted}>{t('tenantView.notFound')}</Text>
+          </View>
+        )}
+      </Screen>
     );
   }
 
-  if (!tenant) {
-    return (
-      <SafeAreaView style={s.container} edges={[]}>
-        <PageHeader />
-        <View style={{ alignItems: 'center', marginTop: 60 }}>
-          <Icon name="person-outline" size={36} color="#D1D5DB" />
-          <Text style={{ color: '#9CA3AF', marginTop: 12, fontSize: 14 }}>Tenant not found.</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // ── Derived ────────────────────────────────────────────────────────────────
+  const contracts: any[] = tenant.contracts ?? [];
+  const contract = contracts.find(c => isActiveStatus(c.status)) ?? contracts[0];
+  const unit = contract?.unit;
+  const unitId = unit?.id ?? contract?.unitId;
+  const property = unit?.property;
+  const active = isActiveStatus(tenant.status);
+  const urgentCount = maintenance.filter(isUrgent).length;
+  const hasInvoice = !!currentInvoice || !!invoiceRecord;
+  const invTone = toneColors[statusTone(currentInvoice?.status ?? 'pending')];
 
-  // ── Derived data ───────────────────────────────────────────────────────────
-  const contracts     = tenant.contracts ?? [];
-  const activeContract = contracts.find((c: any) =>
-    c.status === 'Active' || c.status === 'active',
-  ) ?? contracts[0];
-  const unit          = activeContract?.unit;
-  const unitId        = unit?.id ?? activeContract?.unitId;
-  const property      = unit?.property;
-  const avatarColor   = AVATAR_COLORS[tenantId % AVATAR_COLORS.length];
-  const isActive      = tenant.status === 'Active' || tenant.status === 'active';
-  const urgentCount   = maintenance.filter(m => m.priority === 'urgent' || m.priority === 'high').length;
-
-  // Ticket values: prefer the API, fall back to the local record
-  const ticketTotal   = currentInvoice
-    ? parseFloat(currentInvoice.totalAmount ?? currentInvoice.amount ?? 0) || 0
-    : invoiceRecord?.total ?? 0;
-  const ticketDue     = fmtShortDate(currentInvoice?.dueDate ?? invoiceRecord?.scheduledDate);
-  const ticketStatus  = INVOICE_STATUS_META[(currentInvoice?.status ?? 'pending') as InvoiceStatus] ?? INVOICE_STATUS_META.pending;
-
-  // ── Handlers ───────────────────────────────────────────────────────────────
-  const handleCall = () => {
-    if (!tenant.phoneNumber) return;
-    Linking.openURL(`tel:${tenant.phoneNumber}`).catch(() => Alert.alert('Error', 'Unable to make call'));
+  // ── Actions ────────────────────────────────────────────────────────────────
+  const call = (phone?: string) => {
+    if (!phone) return;
+    Linking.openURL(`tel:${phone}`).catch(() => Alert.alert(t('tenantDetail.error'), t('tenantDetail.unableToCall')));
   };
 
-  const handleSendNotif = () => {
-    Alert.alert('Send Notification', `Send a notification to ${tenant.name}?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Send', onPress: () => Alert.alert('Sent', `Notification sent to ${tenant.name}.`) },
-    ]);
-  };
-
-  const navigateToInvoice = async () => {
-    if (!unitId) {
-      Alert.alert('No active contract', 'This tenant does not have an active contract.');
+  const notify = () => {
+    if (!tenant.userId) {
+      Alert.alert(t('tenantView.noAccountTitle'), t('tenantView.noAccountMsg', { name: tenant.name }));
       return;
     }
-    setInvoiceBtnLoading(true);
+    nav.navigate('SendNotification', { userId: tenant.userId, name: tenant.name });
+  };
+
+  const openInvoice = async () => {
+    // Already billed on the server → open the full invoice directly
+    if (currentInvoice?.id) {
+      nav.navigate('InvoiceDetail', { invoiceId: currentInvoice.id });
+      return;
+    }
+    if (!unitId || !contract) {
+      Alert.alert(t('tenantView.noContractTitle'), t('tenantView.noContractMsg'));
+      return;
+    }
+    setOpening(true);
     try {
       const res = await utilityApi.lastReading(unitId);
-      navigation.navigate('GenerateInvoice', {
-        tenantId:    tenant.id,
-        contractId:  activeContract.id,
+      nav.navigate('GenerateInvoice', {
+        tenantId: tenant.id,
+        tenantName: tenant.name,
+        unitCode: unit?.unitCode,
+        contractId: contract.id,
         unitId,
         lastReading: res,
-        apiInvoice:  currentInvoice
-          ? {
-              id:           currentInvoice.id,
-              totalAmount:  parseFloat(currentInvoice.totalAmount ?? currentInvoice.amount ?? 0),
-              dueDate:      currentInvoice.dueDate ?? null,
-              status:       currentInvoice.status,
-              billingMonth: currentInvoice.billingMonth,
-            }
-          : null,
+        apiInvoice: currentInvoice ? {
+          id: currentInvoice.id,
+          totalAmount: toNum(currentInvoice.totalAmount ?? currentInvoice.amount),
+          dueDate: currentInvoice.dueDate ?? null,
+          status: currentInvoice.status,
+          billingMonth: currentInvoice.billingMonth,
+        } : null,
       });
     } catch {
-      Alert.alert('Error', 'Could not fetch utility readings. Please try again.');
+      Alert.alert(t('tenantDetail.error'), t('tenantView.readingsFailed'));
     } finally {
-      setInvoiceBtnLoading(false);
+      setOpening(false);
     }
   };
 
-  return (
-    <SafeAreaView style={s.container} edges={[]}>
-
-      {/* ── Header ── */}
-      <PageHeader
-        right={
-          <TouchableOpacity style={s.notifBtn} onPress={handleSendNotif} activeOpacity={0.8}>
-            <Icon name="notifications-outline" size={18} color="#6366F1" />
-          </TouchableOpacity>
+  // New password + QR; the old password stops working (FRONTEND_GUIDE §8)
+  const resetLogin = () => Alert.alert(t('tenantView.resetLogin'), t('tenantView.resetLoginMsg', { name: tenant.name }), [
+    { text: t('common.cancel'), style: 'cancel' },
+    {
+      text: t('tenantView.reset'),
+      style: 'destructive',
+      onPress: async () => {
+        try {
+          const c = await tenantsApi.regenerateLogin(tenant.id);
+          if (c) setNewLogin(c);
+        } catch (e: any) {
+          Alert.alert(t('tenantDetail.error'), e?.message ?? t('home.tryAgain'));
         }
+      },
+    },
+  ]);
+
+  const remove = () => confirmAction(
+    t('tenantView.deleteTitle'),
+    t('tenantView.deleteConfirm', { name: tenant.name }),
+    async () => {
+      try {
+        await tenantsApi.remove(tenant.id);
+        nav.goBack();
+      } catch (e: any) {
+        Alert.alert(t('unitDetail.deleteFailed'), e?.message ?? t('home.tryAgain'));
+      }
+    },
+    t('unitDetail.delete'),
+  );
+
+  const unitLine = [
+    unit?.unitCode ? t('billing.unit', { code: unit.unitCode }) : unitId ? t('billing.unit', { code: `#${unitId}` }) : null,
+    unit?.floorNumber ? t('units.floor', { floor: unit.floorNumber }) : null,
+    property?.name,
+  ].filter(Boolean).join(' · ');
+
+  return (
+    <Screen header={header} refreshing={refreshing} onRefresh={onRefresh} contentStyle={{ paddingTop: spacing.sm }}>
+      {/* Profile */}
+      <View style={styles.card}>
+        <View style={styles.profile}>
+          <View style={styles.avatar}><Text style={styles.avatarText}>{initials(tenant.name)}</Text></View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.name} numberOfLines={1}>{tenant.name}</Text>
+            <View style={styles.metaRow}>
+              <View style={[styles.dot, { backgroundColor: active ? colors.success : colors.danger }]} />
+              <Text style={[styles.metaStrong, { color: active ? colors.success : colors.danger }]}>
+                {statusLabel(tenant.status)}
+              </Text>
+              {tenant.user?.username ? <Text style={styles.meta} numberOfLines={1}>· @{tenant.user.username}</Text> : null}
+            </View>
+            {unitLine ? (
+              <View style={styles.metaRow}>
+                <Icon name="home-outline" size={12} color={colors.muted} />
+                <Text style={styles.meta} numberOfLines={1}>{unitLine}</Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+
+        <View style={styles.actions}>
+          <Action icon="call-outline" label={t('tenantDetail.call')} onPress={() => call(tenant.phoneNumber)} disabled={!tenant.phoneNumber} />
+          <Action icon="notifications-outline" label={t('tenantDetail.notify')} onPress={notify} />
+          <Action
+            icon="document-text-outline"
+            label={t('tenantView.contract')}
+            onPress={() => contract && nav.navigate('ContractDetail', { contractId: contract.id })}
+            disabled={!contract}
+          />
+        </View>
+      </View>
+
+      {/* This month's invoice */}
+      {contract ? (
+        hasInvoice ? (
+          <Pressable onPress={openInvoice} disabled={opening} style={({ pressed }) => [styles.card, styles.invoiceCard, pressed && styles.pressed]}>
+            <View style={styles.between}>
+              <Text style={styles.label}>{monthLabel(thisMonthYM())}</Text>
+              {currentInvoice ? (
+                <View style={styles.metaRow}>
+                  <View style={[styles.dot, { backgroundColor: invTone.fg }]} />
+                  <Text style={[styles.metaStrong, { color: invTone.fg }]}>{statusLabel(currentInvoice.status)}</Text>
+                </View>
+              ) : null}
+            </View>
+            <View style={[styles.between, { marginTop: 6, alignItems: 'flex-end' }]}>
+              <Text style={styles.big} numberOfLines={1} adjustsFontSizeToFit>
+                {currentInvoice ? money(currentInvoice.totalAmount ?? currentInvoice.amount, { decimals: 2 }) : riel(invoiceRecord?.total)}
+              </Text>
+              {currentInvoice?.dueDate || invoiceRecord?.scheduledDate ? (
+                <Text style={styles.due}>{t('billing.due', { date: dayLabel(currentInvoice?.dueDate ?? invoiceRecord?.scheduledDate) })}</Text>
+              ) : null}
+            </View>
+            {invoiceRecord ? (
+              <View style={styles.breakdown}>
+                <View style={styles.metaRow}>
+                  <Icon name="flash" size={12} color={toneColors.warning.fg} />
+                  <Text style={styles.meta}>{riel(invoiceRecord.elecCost)}</Text>
+                </View>
+                <View style={styles.metaRow}>
+                  <Icon name="water" size={12} color={toneColors.info.fg} />
+                  <Text style={styles.meta}>{riel(invoiceRecord.waterCost)}</Text>
+                </View>
+              </View>
+            ) : null}
+            <View style={styles.invoiceLink}>
+              <Text style={styles.link}>{t('tenantDetail.viewInvoice')}</Text>
+              {opening ? <ActivityIndicator size="small" color={colors.primary} /> : <Icon name="arrow-forward" size={15} color={colors.primary} />}
+            </View>
+          </Pressable>
+        ) : (
+          <View style={[styles.card, styles.generate]}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.rowTitle}>{t('tenantView.noInvoiceTitle', { month: monthLabel(thisMonthYM()) })}</Text>
+              <Text style={styles.rowSub}>{t('tenantView.noInvoiceHint')}</Text>
+            </View>
+            <TouchableOpacity style={styles.cta} onPress={openInvoice} disabled={opening} activeOpacity={0.8}>
+              {opening ? <ActivityIndicator size="small" color={colors.white} /> : (
+                <>
+                  <Icon name="receipt-outline" size={15} color={colors.white} />
+                  <Text style={styles.ctaText}>{t('tenantView.generate')}</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        )
+      ) : null}
+
+      {/* Sections */}
+      <Segments<Section>
+        style={{ marginTop: spacing.xl }}
+        value={section}
+        onChange={setSection}
+        options={[
+          { value: 'overview', label: t('tenantView.overview') },
+          { value: 'invoices', label: t('tenantView.invoices'), count: invoices.length },
+          { value: 'requests', label: t('tenantView.requests'), count: maintenance.length },
+        ]}
       />
 
-      <ScrollView style={s.scroll} contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
-
-        {/* ── Hero card (dark — matches Dashboard perfBg) ── */}
-        <View style={s.heroCard}>
-          <View style={s.glow1} /><View style={s.glow2} /><View style={s.glow3} />
-
-          {/* Avatar + name + status */}
-          <View style={s.heroTop}>
-            <View style={[s.avatar, { backgroundColor: avatarColor }]}>
-              <Text style={s.avatarText}>{initials(tenant.name)}</Text>
-            </View>
-            <View style={s.heroNameBlock}>
-              <Text style={s.heroName}>{tenant.name}</Text>
-              <View style={s.heroChipRow}>
-                {/* Status chip */}
-                <View style={[s.heroChip, { backgroundColor: isActive ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)' }]}>
-                  <View style={[s.heroDot, { backgroundColor: isActive ? '#22C55E' : '#EF4444' }]} />
-                  <Text style={[s.heroChipText, { color: isActive ? '#86EFAC' : '#FCA5A5' }]}>{tenant.status}</Text>
-                </View>
-                {/* Username chip */}
-                {tenant.user && (
-                  <View style={s.heroChip}>
-                    <Icon name="person-circle-outline" size={11} color="rgba(255,255,255,0.6)" />
-                    <Text style={s.heroChipText}>@{tenant.user.username}</Text>
-                  </View>
-                )}
-              </View>
-            </View>
+      {section === 'overview' ? (
+        <>
+          <Text style={styles.section}>{t('tenantView.contact')}</Text>
+          <View style={[styles.card, styles.flush]}>
+            <InfoRow first label={t('tenantDetail.phone')} value={tenant.phoneNumber} onPress={tenant.phoneNumber ? () => call(tenant.phoneNumber) : undefined} />
+            <InfoRow label={t('tenantView.emergency')} value={tenant.emergencyContact} onPress={tenant.emergencyContact ? () => call(tenant.emergencyContact) : undefined} />
+            <InfoRow label={t('tenantView.gender')} value={tenant.gender ? t(`tenantView.genders.${tenant.gender}`) : null} />
+            <InfoRow label={t('tenantView.idNumber')} value={tenant.idNumber} />
+            <InfoRow label={t('tenantView.occupation')} value={tenant.occupation} />
+            <InfoRow label={t('tenantView.memberSince')} value={dayLabel(tenant.createdAt, true)} />
           </View>
 
-          {/* Unit/property pill */}
-          {(unit || activeContract) && (
-            <View style={s.heroUnitRow}>
-              <Icon name="home-outline" size={12} color="rgba(255,255,255,0.6)" />
-              <Text style={s.heroUnitText}>
-                {unit?.unitCode ? `Unit ${unit.unitCode}` : `Unit #${unitId}`}
-                {unit?.floorNumber ? ` · Floor ${unit.floorNumber}` : ''}
-                {property?.name ? ` · ${property.name}` : ''}
-              </Text>
-            </View>
-          )}
+          {contract ? (
+            <>
+              <Text style={styles.section}>{t('tenantView.contract')}</Text>
+              <View style={[styles.card, styles.flush]}>
+                <View style={styles.term}>
+                  <View style={styles.between}>
+                    <Text style={styles.label}>{t('unitDetail.monthlyRent')}</Text>
+                    <Text style={styles.rent}>{money(contract.monthlyRent, { decimals: 2 })}</Text>
+                  </View>
+                  <View style={[styles.between, { marginTop: 14, marginBottom: 8 }]}>
+                    <Text style={styles.meta}>{dayLabel(contract.startDate, true)} → {dayLabel(contract.endDate, true)}</Text>
+                    {contract.endDate ? (
+                      <Text style={[styles.metaStrong, daysUntil(contract.endDate) <= 30 && { color: colors.warning }]}>
+                        {daysUntil(contract.endDate) <= 0 ? t('unitDetail.ended') : t('unitDetail.daysLeft', { count: daysUntil(contract.endDate) })}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <ProgressBar value={termProgress(contract.startDate, contract.endDate)} height={6} />
+                </View>
+                <ChevronRow
+                  icon="home-outline"
+                  label={unit?.unitCode ? t('billing.unit', { code: unit.unitCode }) : t('units.title')}
+                  sub={property?.name}
+                  onPress={() => unitId && nav.navigate('UnitDetail', { unitId })}
+                />
+                <ChevronRow
+                  icon="document-text-outline"
+                  label={t('unitDetail.viewContract')}
+                  onPress={() => nav.navigate('ContractDetail', { contractId: contract.id })}
+                />
+              </View>
+            </>
+          ) : null}
 
-          {/* Divider */}
-          <View style={s.heroDivider} />
-
-          {/* Action buttons */}
-          <View style={s.actionRow}>
-            <TouchableOpacity style={s.actionBtn} onPress={handleCall} activeOpacity={0.8}>
-              <View style={s.actionIconWrap}>
-                <Icon name="call-outline" size={17} color="#FFFFFF" />
-              </View>
-              <Text style={s.actionBtnText}>Call</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.actionBtn} onPress={handleSendNotif} activeOpacity={0.8}>
-              <View style={s.actionIconWrap}>
-                <Icon name="notifications-outline" size={17} color="#FFFFFF" />
-              </View>
-              <Text style={s.actionBtnText}>Notify</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.actionBtn} onPress={() => navigation.navigate('Requests')} activeOpacity={0.8}>
-              <View style={s.actionIconWrap}>
-                <Icon name="construct-outline" size={17} color="#FFFFFF" />
-              </View>
-              <Text style={s.actionBtnText}>Requests</Text>
-            </TouchableOpacity>
+          <View style={styles.sectionRow}>
+            <Text style={[styles.section, styles.sectionInline]}>{t('tenantView.occupants')}</Text>
+            {can('create', 'occupant') ? (
+              <TouchableOpacity onPress={() => nav.navigate('OccupantForm', { tenantId: tenant.id })} hitSlop={8} style={styles.linkBtn}>
+                <Icon name="add" size={15} color={colors.primary} />
+                <Text style={styles.link}>{t('tenantView.add')}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <View style={[styles.card, styles.flush]}>
+            {!(tenant.occupants?.length) ? (
+              <Text style={styles.emptyLine}>{t('tenantView.noOccupants')}</Text>
+            ) : (tenant.occupants as any[]).map((o, i) => (
+              <Pressable
+                key={o.id}
+                onPress={() => nav.navigate('OccupantForm', { tenantId: tenant.id, occupant: o })}
+                style={({ pressed }) => [styles.row, i > 0 && styles.sep, pressed && styles.pressed]}
+              >
+                <View style={styles.smallAvatar}><Text style={styles.smallAvatarText}>{initials(o.name)}</Text></View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={styles.rowTitle} numberOfLines={1}>{o.name}</Text>
+                  <Text style={styles.rowSub} numberOfLines={1}>
+                    {[o.relationship ?? t('tenantView.occupant'), o.phoneNumber].filter(Boolean).join(' · ')}
+                  </Text>
+                </View>
+                <Icon name="chevron-forward" size={16} color={colors.muted} />
+              </Pressable>
+            ))}
           </View>
 
-          {/* Invoice status / CTA */}
-          {invoiceGenerated ? (
-            <TouchableOpacity
-              style={s.ticket}
-              onPress={navigateToInvoice}
-              activeOpacity={0.9}
-              disabled={invoiceBtnLoading}
-            >
-              {/* Top: month + total + due date */}
-              <View style={s.ticketTop}>
-                <View style={s.ticketIcon}>
-                  <Icon name="receipt-outline" size={20} color="#4F46E5" />
-                  <View style={s.ticketCheck}>
-                    <Icon name="checkmark" size={9} color="#FFFFFF" />
-                  </View>
-                </View>
-                <View style={s.ticketMain}>
-                  <View style={s.ticketOverRow}>
-                    <Text style={s.ticketOverline} numberOfLines={1}>{billingMonth}</Text>
-                    <View style={[s.ticketStatus, { backgroundColor: ticketStatus.bg }]}>
-                      <Icon name={ticketStatus.icon} size={10} color={ticketStatus.color} />
-                      <Text style={[s.ticketStatusText, { color: ticketStatus.color }]}>{ticketStatus.label}</Text>
+          {can('edit', 'tenant') ? (
+            <View style={[styles.card, styles.flush, { marginTop: spacing.xl }]}>
+              <ChevronRow
+                icon="key-outline"
+                label={t('tenantView.resetLogin')}
+                sub={tenant.user?.username ? `@${tenant.user.username}` : undefined}
+                onPress={resetLogin}
+                first
+              />
+            </View>
+          ) : null}
+
+          {can('delete', 'tenant') ? (
+            <Pressable onPress={remove} style={({ pressed }) => [styles.card, styles.deleteRow, pressed && styles.pressed]}>
+              <Icon name="trash-outline" size={17} color={colors.danger} />
+              <Text style={styles.deleteText}>{t('tenantView.deleteTitle')}</Text>
+            </Pressable>
+          ) : null}
+        </>
+      ) : null}
+
+      {section === 'invoices' ? (
+        <>
+          <Segments<InvoiceRange>
+            style={{ marginTop: spacing.md }}
+            value={range}
+            onChange={setRange}
+            options={RANGES.map(r => ({ value: r.value, label: t(`tenantView.${r.key}`) }))}
+          />
+          <View style={[styles.card, styles.flush, { marginTop: spacing.md }]}>
+            {invoicesLoading ? <ActivityIndicator color={colors.primary} style={{ paddingVertical: 28 }} /> :
+              invoices.length === 0 ? <Text style={styles.emptyLine}>{t('tenantView.noInvoices')}</Text> :
+              invoices.map((inv, i) => {
+                // paymentStatus (paid / partial / unpaid) is what matters for "who paid what"
+                const ps: string | undefined = inv.paymentStatus;
+                const tc = ps
+                  ? ({ paid: toneColors.success, partial: toneColors.warning, unpaid: toneColors.danger } as any)[ps] ?? toneColors.neutral
+                  : toneColors[statusTone(inv.status)];
+                const overdue = !!inv.isOverdue && ps !== 'paid';
+                return (
+                  <Pressable
+                    key={inv.id}
+                    onPress={() => nav.navigate('InvoiceDetail', { invoiceId: inv.id })}
+                    style={({ pressed }) => [styles.row, i > 0 && styles.sep, pressed && styles.pressed]}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.rowTitle}>{monthLabel(monthKey(inv.billingMonth ?? inv.createdAt))}</Text>
+                      {inv.dueDate ? <Text style={styles.rowSub}>{t('billing.due', { date: dayLabel(inv.dueDate) })}</Text> : null}
                     </View>
-                  </View>
-                  <Text style={s.ticketAmount} numberOfLines={1} adjustsFontSizeToFit>{fmtKhr(ticketTotal)}</Text>
-                </View>
-                {!!ticketDue && (
-                  <View style={s.ticketDue}>
-                    <Text style={s.ticketDueLabel}>Due</Text>
-                    <Text style={s.ticketDueValue}>{ticketDue}</Text>
-                  </View>
-                )}
-              </View>
-
-              {/* Perforated divider */}
-              <View style={s.ticketPerf}>
-                {Array.from({ length: 40 }).map((_, i) => <View key={i} style={s.ticketPerfDash} />)}
-              </View>
-
-              {/* Bottom: status / breakdown + view */}
-              <View style={s.ticketBottom}>
-                <View style={s.ticketBreakdown}>
-                  {invoiceRecord ? (
-                    <>
-                      <View style={s.ticketBreakItem}>
-                        <Icon name="flash" size={12} color="#F59E0B" />
-                        <Text style={s.ticketBreakText} numberOfLines={1}>{fmtKhr(invoiceRecord.elecCost)}</Text>
-                      </View>
-                      <View style={s.ticketBreakItem}>
-                        <Icon name="water" size={12} color="#0EA5E9" />
-                        <Text style={s.ticketBreakText} numberOfLines={1}>{fmtKhr(invoiceRecord.waterCost)}</Text>
-                      </View>
-                    </>
-                  ) : (
-                    <Text style={s.ticketBreakText} numberOfLines={1}>Saved to server</Text>
-                  )}
-                </View>
-                <View style={s.ticketView}>
-                  <Text style={s.ticketViewText}>View</Text>
-                  <View style={s.ticketViewArrow}>
-                    {invoiceBtnLoading
-                      ? <ActivityIndicator size="small" color="#FFFFFF" />
-                      : <Icon name="arrow-forward" size={14} color="#FFFFFF" />}
-                  </View>
-                </View>
-              </View>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={s.invoiceBtn}
-              onPress={navigateToInvoice}
-              activeOpacity={0.85}
-              disabled={invoiceBtnLoading}
-            >
-              {invoiceBtnLoading
-                ? <ActivityIndicator size="small" color="#FFFFFF" />
-                : <>
-                    <Icon name="receipt-outline" size={17} color="#FFFFFF" />
-                    <Text style={s.invoiceBtnText}>{t('tenantDetail.generateInvoice')}</Text>
-                  </>
-              }
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* ── Quick stats row ── */}
-        <View style={s.statsRow}>
-          <View style={s.statCard}>
-            <Icon name="document-text-outline" size={18} color="#6366F1" />
-            <Text style={s.statValue}>{contracts.length}</Text>
-            <Text style={s.statLabel}>Contracts</Text>
-          </View>
-          <View style={s.statCard}>
-            <Icon name="construct-outline" size={18} color={urgentCount > 0 ? '#DC2626' : '#6B7280'} />
-            <Text style={[s.statValue, urgentCount > 0 && { color: '#DC2626' }]}>{maintenance.length}</Text>
-            <Text style={s.statLabel}>Requests{urgentCount > 0 ? ` (${urgentCount} urgent)` : ''}</Text>
-          </View>
-          <View style={s.statCard}>
-            <Icon name="receipt-outline" size={18} color="#16A34A" />
-            <Text style={s.statValue}>{invoices.length}</Text>
-            <Text style={s.statLabel}>Invoices</Text>
-          </View>
-        </View>
-
-        {/* ── Tenant Information ── */}
-        <Text style={s.sectionTitle}>Tenant Information</Text>
-        <View style={s.card}>
-          {[
-            { icon: 'call-outline',             label: 'Phone',            value: tenant.phoneNumber      ?? '—' },
-            { icon: 'shield-checkmark-outline', label: 'Emergency Contact', value: tenant.emergencyContact ?? '—' },
-            { icon: 'briefcase-outline',        label: 'Occupation',        value: tenant.occupation       ?? '—' },
-            { icon: 'calendar-outline',         label: 'Member Since',      value: fmtDate(tenant.createdAt) },
-          ].map((row, i, arr) => (
-            <View key={row.label}>
-              <View style={s.infoRow}>
-                <View style={s.infoIconWrap}>
-                  <Icon name={row.icon} size={15} color="#6366F1" />
-                </View>
-                <View style={s.infoBody}>
-                  <Text style={s.infoLabel}>{row.label}</Text>
-                  <Text style={s.infoValue}>{row.value}</Text>
-                </View>
-              </View>
-              {i < arr.length - 1 && <View style={s.divider} />}
-            </View>
-          ))}
-        </View>
-
-        {/* ── Contract Details ── */}
-        {activeContract && (
-          <>
-            <Text style={s.sectionTitle}>Contract Details</Text>
-            <View style={s.card}>
-              {[
-                { icon: 'home-outline',     label: 'Unit',           value: unit?.unitCode  ?? '—' },
-                { icon: 'business-outline', label: 'Property',       value: property?.name  ?? '—' },
-                { icon: 'calendar-outline', label: 'Move-in Date',   value: fmtDate(activeContract.startDate) },
-                { icon: 'time-outline',     label: 'Contract Until', value: fmtDate(activeContract.endDate) },
-                { icon: 'cash-outline',     label: 'Monthly Rent',   value: fmtMoney(activeContract.monthlyRent ?? 0) },
-              ].map((row, i, arr) => (
-                <View key={row.label}>
-                  <View style={s.infoRow}>
-                    <View style={s.infoIconWrap}>
-                      <Icon name={row.icon} size={15} color="#6366F1" />
-                    </View>
-                    <View style={s.infoBody}>
-                      <Text style={s.infoLabel}>{row.label}</Text>
-                      <Text style={s.infoValue}>{row.value}</Text>
-                    </View>
-                  </View>
-                  {i < arr.length - 1 && <View style={s.divider} />}
-                </View>
-              ))}
-            </View>
-          </>
-        )}
-
-        {/* ── Maintenance Requests (styled like dashboard mntCards) ── */}
-        <View style={s.sectionHeaderRow}>
-          <Text style={s.sectionTitle}>Maintenance Requests</Text>
-          {urgentCount > 0 && (
-            <View style={s.urgentBadge}>
-              <View style={s.urgentDot} />
-              <Text style={s.urgentBadgeText}>{urgentCount} Urgent</Text>
-            </View>
-          )}
-        </View>
-
-        {maintenance.length === 0 ? (
-          <View style={s.emptyCard}>
-            <View style={[s.emptyIconWrap, { backgroundColor: '#EEF2FF' }]}>
-              <Icon name="construct-outline" size={24} color="#6366F1" />
-            </View>
-            <Text style={s.emptyTitle}>No requests found</Text>
-            <Text style={s.emptySubtitle}>No maintenance linked to this tenant's units</Text>
-          </View>
-        ) : (
-          <View style={s.mntList}>
-            {maintenance.map(req => {
-              const meta     = MAINTENANCE_STATUS[req.status as MaintenanceStatus] ?? MAINTENANCE_STATUS.pending;
-              const isUrgent = req.priority === 'urgent' || req.priority === 'high';
-              return (
-                <TouchableOpacity
-                  key={req.id}
-                  style={s.mntCard}
-                  activeOpacity={0.75}
-                  onPress={() => navigation.navigate('Requests', {
-                    screen: 'RequestDetail',
-                    params: { requestId: req.id },
-                  })}
-                >
-                  <View style={[s.mntAccent, { backgroundColor: isUrgent ? '#EF4444' : '#6366F1' }]} />
-                  <View style={[s.mntIconWrap, { backgroundColor: isUrgent ? '#FEF2F2' : '#EEF2FF' }]}>
-                    <Icon name="construct-outline" size={19} color={isUrgent ? '#DC2626' : '#6366F1'} />
-                  </View>
-                  <View style={s.mntBody}>
-                    <View style={s.mntTopRow}>
-                      <Text style={s.mntTitle} numberOfLines={1}>{req.description}</Text>
-                      {isUrgent && (
-                        <View style={s.urgentInlineBadge}>
-                          <View style={s.urgentDot} />
-                          <Text style={s.urgentInlineText}>Urgent</Text>
-                        </View>
-                      )}
-                    </View>
-                    <View style={s.mntMetaRow}>
-                      <View style={s.mntChip}>
-                        <Icon name="construct-outline" size={10} color="#6B7280" />
-                        <Text style={s.mntChipText}>{req.type}</Text>
-                      </View>
-                      <View style={s.mntChip}>
-                        <Icon name="time-outline" size={10} color="#6B7280" />
-                        <Text style={s.mntChipText}>{timeAgo(req.createdAt)}</Text>
-                      </View>
-                      <View style={[s.mntChip, { backgroundColor: meta.bg }]}>
-                        <Text style={[s.mntChipText, { color: meta.color, fontWeight: '700' }]}>{meta.label}</Text>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={styles.amount}>{money(inv.totalAmount ?? inv.amount, { decimals: 2 })}</Text>
+                      <View style={[styles.metaRow, { marginTop: 3 }]}>
+                        <View style={[styles.dot, { backgroundColor: overdue ? colors.danger : tc.fg }]} />
+                        <Text style={[styles.status, { color: overdue ? colors.danger : tc.fg }]}>
+                          {overdue ? t('status.overdue') : ps ? t(`invoiceView.ps.${ps}`) : statusLabel(inv.status)}
+                        </Text>
                       </View>
                     </View>
-                  </View>
-                  <Icon name="chevron-forward" size={15} color="#D1D5DB" style={{ paddingRight: 12 }} />
-                </TouchableOpacity>
-              );
-            })}
+                  </Pressable>
+                );
+              })}
           </View>
-        )}
+        </>
+      ) : null}
 
-        {/* ── Invoice History ── */}
-        <View style={s.sectionHeaderRow}>
-          <Text style={s.sectionTitle}>Invoice History</Text>
-          {invoicesLoading && <ActivityIndicator size="small" color="#6366F1" />}
-        </View>
-
-        {/* Range filter pills */}
-        <View style={s.rangeRow}>
-          {INVOICE_RANGES.map(opt => (
-            <TouchableOpacity
-              key={opt.key}
-              style={[s.rangeBtn, invoiceRange === opt.key && s.rangeBtnActive]}
-              onPress={() => setInvoiceRange(opt.key)}
-              activeOpacity={0.7}
-            >
-              <Text style={[s.rangeBtnText, invoiceRange === opt.key && s.rangeBtnTextActive]}>
-                {opt.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {!invoicesLoading && invoices.length === 0 ? (
-          <View style={s.emptyCard}>
-            <View style={[s.emptyIconWrap, { backgroundColor: '#EEF2FF' }]}>
-              <Icon name="receipt-outline" size={24} color="#6366F1" />
+      {section === 'requests' ? (
+        <>
+          {urgentCount > 0 ? (
+            <View style={styles.urgentNote}>
+              <Icon name="alert-circle" size={15} color={colors.danger} />
+              <Text style={styles.urgentText}>{t('tenantView.urgentCount', { count: urgentCount })}</Text>
             </View>
-            <Text style={s.emptyTitle}>No invoices found</Text>
-            <Text style={s.emptySubtitle}>No invoices for the selected period</Text>
+          ) : null}
+          <View style={[styles.card, styles.flush, { marginTop: spacing.md }]}>
+            {maintenance.length === 0 ? <Text style={styles.emptyLine}>{t('tenantView.noRequests')}</Text> :
+              maintenance.map((m, i) => {
+                const tc = toneColors[statusTone(m.status)];
+                const urgent = isUrgent(m);
+                return (
+                  <Pressable
+                    key={m.id}
+                    onPress={() => nav.navigate('RequestDetail', { requestId: m.id })}
+                    style={({ pressed }) => [styles.row, i > 0 && styles.sep, pressed && styles.pressed]}
+                  >
+                    <View style={[styles.smallIcon, urgent && { backgroundColor: colors.dangerSoft }]}>
+                      <Icon name="construct-outline" size={16} color={urgent ? colors.danger : colors.ink} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.rowTitle} numberOfLines={1}>{m.description || statusLabel(m.type)}</Text>
+                      <Text style={styles.rowSub} numberOfLines={1}>
+                        {[statusLabel(m.type), timeAgo(m.createdAt)].filter(Boolean).join(' · ')}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={[styles.status, { color: tc.fg }]}>{statusLabel(m.status)}</Text>
+                      {urgent ? <Text style={[styles.status, { color: colors.danger, marginTop: 3 }]}>{t('tenantView.urgent')}</Text> : null}
+                    </View>
+                  </Pressable>
+                );
+              })}
           </View>
-        ) : (
-          <View style={s.card}>
-            {invoices.map((inv: any, i: number) => {
-              const status = (inv.status ?? 'pending') as InvoiceStatus;
-              const meta   = INVOICE_STATUS_META[status] ?? INVOICE_STATUS_META.pending;
-              const amount = parseFloat(inv.totalAmount ?? inv.amount ?? 0);
-              const billing = inv.billingMonth ?? inv.createdAt?.slice(0, 7);
-              return (
-                <View key={inv.id}>
-                  <View style={s.invRow}>
-                    <View style={[s.invIconWrap, { backgroundColor: meta.bg }]}>
-                      <Icon name={meta.icon} size={16} color={meta.color} />
-                    </View>
-                    <View style={s.invBody}>
-                      <Text style={s.invMonth}>{billing ? fmtMonth(billing) : '—'}</Text>
-                      {inv.dueDate && <Text style={s.invDue}>Due {fmtDate(inv.dueDate)}</Text>}
-                    </View>
-                    <View style={s.invRight}>
-                      <Text style={s.invAmount}>{fmtMoney(amount)}</Text>
-                      <View style={[s.invStatusPill, { backgroundColor: meta.bg }]}>
-                        <Text style={[s.invStatusText, { color: meta.color }]}>{meta.label}</Text>
-                      </View>
-                    </View>
-                  </View>
-                  {i < invoices.length - 1 && <View style={s.divider} />}
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        {/* ── Occupants ── */}
-        {tenant.occupants?.length > 0 && (
-          <>
-            <Text style={s.sectionTitle}>Occupants</Text>
-            <View style={[s.card, { marginBottom: 8 }]}>
-              {tenant.occupants.map((occ: any, i: number) => (
-                <View key={occ.id}>
-                  <View style={s.infoRow}>
-                    <View style={s.infoIconWrap}>
-                      <Icon name="person-outline" size={15} color="#6366F1" />
-                    </View>
-                    <View style={s.infoBody}>
-                      <Text style={s.infoLabel}>{occ.relationship ?? 'Occupant'}</Text>
-                      <Text style={s.infoValue}>{occ.name}</Text>
-                      {occ.phoneNumber && <Text style={s.infoSub}>{occ.phoneNumber}</Text>}
-                    </View>
-                  </View>
-                  {i < tenant.occupants.length - 1 && <View style={s.divider} />}
-                </View>
-              ))}
-            </View>
-          </>
-        )}
-
-      </ScrollView>
-    </SafeAreaView>
+        </>
+      ) : null}
+      <TenantCredentialsSheet
+        visible={!!newLogin}
+        name={tenant.name}
+        credentials={newLogin}
+        onDone={() => setNewLogin(null)}
+      />
+    </Screen>
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F6FA' },
-  scroll:    { flex: 1 },
-  content:   { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 40, gap: 16 },
+// ─── Small pieces ────────────────────────────────────────────────────────────
 
-  // ── Header (matches Dashboard hdr) ──
-  header: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingBottom: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#F3F4F6',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04, shadowRadius: 8, elevation: 4,
+function Action({ icon, label, onPress, disabled }: { icon: string; label: string; onPress: () => void; disabled?: boolean }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [styles.action, pressed && { opacity: 0.6 }, disabled && { opacity: 0.4 }]}
+      accessibilityRole="button"
+    >
+      <Icon name={icon} size={17} color={colors.primary} />
+      <Text style={styles.actionText} numberOfLines={1}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function InfoRow({ label, value, onPress, first }: { label: string; value?: string | null; onPress?: () => void; first?: boolean }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress}
+      style={({ pressed }) => [styles.info, !first && styles.sep, pressed && styles.pressed]}
+    >
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={[styles.infoValue, onPress && { color: colors.primary }]} numberOfLines={1}>{value || '—'}</Text>
+    </Pressable>
+  );
+}
+
+function ChevronRow({ icon, label, sub, onPress, first }: { icon: string; label: string; sub?: string; onPress: () => void; first?: boolean }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, !first && styles.sep, pressed && styles.pressed]}>
+      <View style={styles.smallIcon}><Icon name={icon} size={16} color={colors.ink} /></View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.rowLabel} numberOfLines={1}>{label}</Text>
+        {sub ? <Text style={styles.rowSub} numberOfLines={1}>{sub}</Text> : null}
+      </View>
+      <Icon name="chevron-forward" size={16} color={colors.muted} />
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  // Header
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.bg, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  title: { fontSize: 22, fontWeight: '700', color: colors.ink, letterSpacing: -0.4 },
+  iconBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surface,
+    borderWidth: 1, borderColor: colors.divider, alignItems: 'center', justifyContent: 'center',
   },
-  backBtn: {
-    width: 36, height: 36, borderRadius: 18, backgroundColor: '#F3F4F6',
-    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  notFound: { alignItems: 'center', marginTop: 60, gap: 10 },
+  muted: { color: colors.muted, fontSize: 14 },
+
+  // Cards
+  card: { backgroundColor: colors.surface, borderRadius: radius.xl, padding: spacing.xl, borderWidth: 1, borderColor: colors.divider },
+  flush: { padding: 0, overflow: 'hidden' },
+  pressed: { backgroundColor: colors.surfaceAlt },
+  between: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+
+  // Profile
+  profile: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  avatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: colors.primary, fontWeight: '700', fontSize: 19 },
+  name: { fontSize: 19, fontWeight: '700', color: colors.ink, letterSpacing: -0.3 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4, flexShrink: 1 },
+  meta: { fontSize: 12, color: colors.textSecondary, flexShrink: 1 },
+  metaStrong: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  actions: { flexDirection: 'row', gap: 8, marginTop: spacing.lg },
+  action: {
+    flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    height: 40, borderRadius: 12, backgroundColor: colors.primarySoft,
   },
-  headerTitle: { flex: 1, fontSize: 17, fontWeight: '800', color: '#111827', letterSpacing: -0.3 },
-  notifBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  actionText: { fontSize: 13, fontWeight: '600', color: colors.primary },
+
+  // Invoice card
+  invoiceCard: { marginTop: spacing.md },
+  label: { fontSize: 13, color: colors.textSecondary, fontWeight: '500' },
+  big: { fontSize: 26, fontWeight: '700', color: colors.ink, letterSpacing: -0.6, flexShrink: 1 },
+  due: { fontSize: 13, fontWeight: '600', color: colors.textSecondary, marginBottom: 4 },
+  breakdown: { flexDirection: 'row', gap: 16, marginTop: 8 },
+  invoiceLink: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: spacing.lg, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.divider,
   },
-
-  // ── Hero card (dark — matches Dashboard perfBg) ──
-  heroCard: {
-    backgroundColor: 'rgba(49,46,129,0.90)', borderRadius: 24, padding: 20,
-    overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)',
-    shadowColor: '#312E81', shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25, shadowRadius: 20, elevation: 8,
+  link: { fontSize: 13, fontWeight: '600', color: colors.primary },
+  generate: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: spacing.md, padding: spacing.lg },
+  cta: {
+    flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.primary,
+    borderRadius: radius.pill, paddingHorizontal: 14, height: 36, minWidth: 90, justifyContent: 'center',
   },
-  glow1: { position: 'absolute', width: 200, height: 200, borderRadius: 100, backgroundColor: 'rgba(167,139,250,0.18)', top: -70,  right: -50 },
-  glow2: { position: 'absolute', width: 140, height: 140, borderRadius: 70,  backgroundColor: 'rgba(99,102,241,0.15)',  bottom: -50, left: -30 },
-  glow3: { position: 'absolute', width: 90,  height: 90,  borderRadius: 45,  backgroundColor: 'rgba(196,181,253,0.12)', top: 50,   left: 110  },
+  ctaText: { color: colors.white, fontSize: 13, fontWeight: '600' },
 
-  heroTop:       { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 14 },
-  avatar:        { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  avatarText:    { fontSize: 22, fontWeight: '800', color: '#FFFFFF' },
-  heroNameBlock: { flex: 1 },
-  heroName:      { fontSize: 19, fontWeight: '800', color: '#FFFFFF', letterSpacing: -0.4, marginBottom: 6 },
-  heroChipRow:   { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  heroChip:      { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  heroDot:       { width: 5, height: 5, borderRadius: 3 },
-  heroChipText:  { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.75)' },
+  // Sections
+  section: { fontSize: 15, fontWeight: '700', color: colors.ink, marginTop: spacing.xl, marginBottom: 10, paddingHorizontal: 4 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.xl, marginBottom: 10, paddingRight: 4 },
+  sectionInline: { marginTop: 0, marginBottom: 0 },
+  linkBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
 
-  heroUnitRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 16 },
-  heroUnitText: { fontSize: 12, color: 'rgba(255,255,255,0.6)', fontWeight: '500' },
+  // Rows
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: spacing.lg },
+  sep: { borderTopWidth: 1, borderTopColor: colors.divider },
+  rowTitle: { fontSize: 15, fontWeight: '600', color: colors.ink },
+  rowLabel: { fontSize: 14, fontWeight: '600', color: colors.ink },
+  rowSub: { fontSize: 12, color: colors.textSecondary, marginTop: 3 },
+  smallIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
+  smallAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
+  smallAvatarText: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
+  amount: { fontSize: 14, fontWeight: '600', color: colors.ink },
+  status: { fontSize: 11, fontWeight: '600' },
+  emptyLine: { fontSize: 13, color: colors.muted, padding: spacing.lg, textAlign: 'center' },
 
-  heroDivider: { height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.12)', marginBottom: 16 },
+  info: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 14, paddingHorizontal: spacing.lg },
+  infoLabel: { fontSize: 14, color: colors.textSecondary },
+  infoValue: { fontSize: 14, fontWeight: '600', color: colors.ink, flexShrink: 1, textAlign: 'right' },
 
-  // ── Action buttons (inside hero) ──
-  actionRow:    { flexDirection: 'row', gap: 8, marginBottom: 14 },
-  actionBtn:    { flex: 1, alignItems: 'center', gap: 6 },
-  actionIconWrap: {
-    width: 44, height: 44, borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+  term: { padding: spacing.lg },
+  rent: { fontSize: 18, fontWeight: '700', color: colors.ink },
+
+  urgentNote: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: spacing.md,
+    backgroundColor: colors.dangerSoft, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
   },
-  actionBtnText: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.75)' },
+  urgentText: { fontSize: 13, fontWeight: '600', color: colors.danger },
 
-  // ── Invoice CTA / generated banner (inside hero) ──
-  invoiceBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#6366F1', borderRadius: 14, paddingVertical: 13,
-    shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4, shadowRadius: 8, elevation: 4,
-  },
-  invoiceBtnText: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
-
-  // Generated invoice — white "ticket" that pops off the indigo hero
-  ticket: {
-    backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden',
-    shadowColor: '#1E1B4B', shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25, shadowRadius: 12, elevation: 6,
-  },
-  ticketTop:      { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingTop: 14, paddingBottom: 12 },
-  ticketIcon:     { width: 42, height: 42, borderRadius: 13, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
-  ticketCheck: {
-    position: 'absolute', right: -3, bottom: -3, width: 16, height: 16, borderRadius: 8,
-    backgroundColor: '#16A34A', borderWidth: 2, borderColor: '#FFFFFF',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  ticketMain:     { flex: 1 },
-  ticketOverRow:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  ticketOverline: { fontSize: 10, fontWeight: '700', color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.6, flexShrink: 1 },
-  ticketAmount:   { fontSize: 20, fontWeight: '900', color: '#1E1B4B', letterSpacing: -0.5, marginTop: 2 },
-  ticketDue:      { alignItems: 'center', backgroundColor: '#F5F3FF', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
-  ticketDueLabel: { fontSize: 9, fontWeight: '700', color: '#8B5CF6', textTransform: 'uppercase', letterSpacing: 0.5 },
-  ticketDueValue: { fontSize: 12, fontWeight: '800', color: '#5B21B6', marginTop: 1 },
-
-  ticketPerf:     { flexDirection: 'row', gap: 4, overflow: 'hidden', marginHorizontal: 14 },
-  ticketPerfDash: { width: 6, height: 1.5, borderRadius: 1, backgroundColor: '#E5E7EB' },
-
-  ticketBottom:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, gap: 10 },
-  ticketBreakdown: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  ticketStatus:    { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  ticketStatusText:{ fontSize: 9, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4 },
-  ticketBreakItem: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
-  ticketBreakText: { fontSize: 11, fontWeight: '600', color: '#6B7280', flexShrink: 1 },
-  ticketView:      { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  ticketViewText:  { fontSize: 13, fontWeight: '800', color: '#4F46E5' },
-  ticketViewArrow: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#4F46E5', alignItems: 'center', justifyContent: 'center' },
-
-  // ── Quick stats row ──
-  statsRow: { flexDirection: 'row', gap: 10 },
-  statCard: {
-    flex: 1, backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 14,
-    alignItems: 'center', gap: 4,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
-  },
-  statValue: { fontSize: 20, fontWeight: '900', color: '#111827', letterSpacing: -0.5 },
-  statLabel: { fontSize: 10, fontWeight: '600', color: '#9CA3AF', textAlign: 'center' },
-
-  // ── Section titles (matches Dashboard sectionTitle) ──
-  sectionTitle:    { fontSize: 16, fontWeight: '800', color: '#111827', letterSpacing: -0.3 },
-  sectionHeaderRow:{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-
-  // ── White cards ──
-  card: {
-    backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
-  },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: '#F3F4F6', marginHorizontal: 16 },
-
-  // ── Info rows ──
-  infoRow:     { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
-  infoIconWrap:{ width: 32, height: 32, borderRadius: 10, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  infoBody:    { flex: 1, justifyContent: 'center' },
-  infoLabel:   { fontSize: 11, color: '#9CA3AF', marginBottom: 2, fontWeight: '500' },
-  infoValue:   { fontSize: 14, fontWeight: '600', color: '#111827' },
-  infoSub:     { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
-
-  // ── Urgent badge (section header) ──
-  urgentBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: '#FEF2F2', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 20,
-  },
-  urgentDot:       { width: 5, height: 5, borderRadius: 3, backgroundColor: '#EF4444' },
-  urgentBadgeText: { fontSize: 11, fontWeight: '700', color: '#DC2626' },
-
-  // ── Maintenance cards (matches Dashboard mntCard) ──
-  mntList: { gap: 10 },
-  mntCard: {
-    backgroundColor: '#FFFFFF', borderRadius: 16,
-    flexDirection: 'row', alignItems: 'center', overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
-  },
-  mntAccent:   { width: 4, alignSelf: 'stretch' },
-  mntIconWrap: { width: 44, height: 44, borderRadius: 12, margin: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  mntBody:     { flex: 1, paddingVertical: 12, paddingRight: 4 },
-  mntTopRow:   { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },
-  mntTitle:    { flex: 1, fontSize: 13, fontWeight: '700', color: '#111827' },
-  mntMetaRow:  { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-  mntChip:     { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#F3F4F6', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6 },
-  mntChipText: { fontSize: 10, fontWeight: '600', color: '#6B7280' },
-  urgentInlineBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#FEF2F2', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 7 },
-  urgentInlineText:  { fontSize: 10, fontWeight: '700', color: '#DC2626' },
-
-  // ── Invoice history ──
-  rangeRow: { flexDirection: 'row', gap: 8 },
-  rangeBtn: {
-    flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 12,
-    backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: 'transparent',
-  },
-  rangeBtnActive:     { backgroundColor: '#EEF2FF', borderColor: '#6366F1' },
-  rangeBtnText:       { fontSize: 12, fontWeight: '700', color: '#6B7280' },
-  rangeBtnTextActive: { color: '#6366F1' },
-
-  invRow:       { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
-  invIconWrap:  { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  invBody:      { flex: 1 },
-  invMonth:     { fontSize: 14, fontWeight: '700', color: '#111827' },
-  invDue:       { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
-  invRight:     { alignItems: 'flex-end', gap: 4, flexShrink: 0 },
-  invAmount:    { fontSize: 13, fontWeight: '700', color: '#111827' },
-  invStatusPill:{ borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  invStatusText:{ fontSize: 11, fontWeight: '700' },
-
-  // ── Empty states ──
-  emptyCard: {
-    backgroundColor: '#FFFFFF', borderRadius: 18,
-    alignItems: 'center', paddingVertical: 36, paddingHorizontal: 20,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05, shadowRadius: 10, elevation: 2,
-  },
-  emptyIconWrap: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  emptyTitle:    { fontSize: 14, fontWeight: '700', color: '#111827', marginBottom: 4 },
-  emptySubtitle: { fontSize: 12, color: '#9CA3AF', textAlign: 'center', lineHeight: 17 },
+  deleteRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: spacing.xxl, paddingVertical: 14 },
+  deleteText: { fontSize: 15, fontWeight: '600', color: colors.danger },
 });

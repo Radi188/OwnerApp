@@ -2,8 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Modal,
   View,
-  Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -11,6 +9,8 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { Text } from './Text';
+import { Input } from './form';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from 'react-i18next';
@@ -26,7 +26,6 @@ export default function QuickLoginModal() {
   const { t } = useTranslation();
 
   const [password,  setPassword]  = useState('');
-  const [showPass,  setShowPass]  = useState(false);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState('');
   const [bioType,   setBioType]   = useState<BiometricType>(null);
@@ -40,7 +39,6 @@ export default function QuickLoginModal() {
     if (quickLoginVisible) {
       setPassword('');
       setError('');
-      setShowPass(false);
       slideAnim.setValue(80);
       fadeAnim.setValue(0);
       Animated.parallel([
@@ -126,7 +124,7 @@ export default function QuickLoginModal() {
           {/* Lock icon */}
           <View style={s.iconWrap}>
             <View style={s.iconCircle}>
-              <Icon name="lock-closed" size={26} color="#6366F1" />
+              <Icon name="lock-closed" size={26} color="#0F766E" />
             </View>
           </View>
 
@@ -148,7 +146,7 @@ export default function QuickLoginModal() {
           {propertyId != null && (
             <View style={s.propRow}>
               <View style={s.propIcon}>
-                <Icon name="business" size={16} color="#6366F1" />
+                <Icon name="business" size={16} color="#0F766E" />
               </View>
               <View style={s.propInfo}>
                 <Text style={s.propLabel}>Property</Text>
@@ -168,26 +166,19 @@ export default function QuickLoginModal() {
             </View>
           )}
 
-          {/* Password field */}
-          <View style={s.inputWrap}>
-            <Icon name="lock-closed-outline" size={18} color="#9CA3AF" style={s.inputIcon} />
-            <TextInput
-              style={s.input}
-              placeholder={t('login.passwordPlaceholder')}
-              placeholderTextColor="#D1D5DB"
-              value={password}
-              onChangeText={v => { setPassword(v); setError(''); }}
-              secureTextEntry={!showPass}
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoFocus
-              returnKeyType="done"
-              onSubmitEditing={handleSubmit}
-            />
-            <TouchableOpacity style={s.eyeBtn} onPress={() => setShowPass(v => !v)}>
-              <Icon name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color="#9CA3AF" />
-            </TouchableOpacity>
-          </View>
+          {/* Password field (eye toggle built into Input) */}
+          <Input
+            label={t('login.password')}
+            placeholder={t('login.passwordPlaceholder')}
+            value={password}
+            onChangeText={v => { setPassword(v); setError(''); }}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoFocus
+            returnKeyType="done"
+            onSubmitEditing={handleSubmit}
+          />
 
           {/* Continue button */}
           <TouchableOpacity
@@ -215,13 +206,13 @@ export default function QuickLoginModal() {
               disabled={bioLoading || loading}
             >
               {bioLoading ? (
-                <ActivityIndicator color="#6366F1" size="small" />
+                <ActivityIndicator color="#0F766E" size="small" />
               ) : (
                 <>
                   <Icon
                     name={bioType === 'FaceID' ? 'scan-outline' : 'finger-print-outline'}
                     size={20}
-                    color="#6366F1"
+                    color="#0F766E"
                   />
                   <Text style={s.bioBtnText}>Use {bioType}</Text>
                 </>
@@ -260,19 +251,19 @@ const s = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#F0FDFA',
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  title:    { fontSize: 20, fontWeight: '800', color: '#111827', textAlign: 'center', marginBottom: 6 },
+  title:    { fontSize: 20, fontWeight: '800', color: '#0F172A', textAlign: 'center', marginBottom: 6 },
   subtitle: { fontSize: 14, color: '#9CA3AF', textAlign: 'center', marginBottom: 24, lineHeight: 20 },
 
   userRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#F8FAFC',
     borderRadius: 14,
     padding: 12,
     marginBottom: 10,
@@ -283,7 +274,7 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#F8FAFC',
     borderRadius: 14,
     padding: 12,
     marginBottom: 16,
@@ -292,7 +283,7 @@ const s = StyleSheet.create({
   },
   propIcon: {
     width: 34, height: 34, borderRadius: 10,
-    backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center',
   },
   propInfo:  { flex: 1 },
   propLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
@@ -301,7 +292,7 @@ const s = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: '#6366F1',
+    backgroundColor: '#0F766E',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -321,29 +312,16 @@ const s = StyleSheet.create({
   },
   errorText: { flex: 1, fontSize: 13, color: '#DC2626' },
 
-  inputWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    paddingHorizontal: 14,
-    marginBottom: 20,
-  },
-  inputIcon: { marginRight: 10 },
-  input:     { flex: 1, fontSize: 15, color: '#111827', paddingVertical: 14 },
-  eyeBtn:    { padding: 4 },
 
   continueBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#6366F1',
+    backgroundColor: '#0F766E',
     borderRadius: 16,
     paddingVertical: 16,
-    shadowColor: '#6366F1',
+    shadowColor: '#0F766E',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 10,
@@ -356,11 +334,11 @@ const s = StyleSheet.create({
   bioBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, paddingVertical: 14, borderRadius: 16,
-    borderWidth: 1.5, borderColor: '#E0E7FF', backgroundColor: '#F5F3FF',
+    borderWidth: 1.5, borderColor: '#CCFBF1', backgroundColor: '#F5F3FF',
     marginBottom: 12,
   },
   bioBtnDisabled: { opacity: 0.6 },
-  bioBtnText: { fontSize: 15, fontWeight: '600', color: '#6366F1' },
+  bioBtnText: { fontSize: 15, fontWeight: '600', color: '#0F766E' },
 
   logoutBtn:  { alignItems: 'center', paddingVertical: 8 },
   logoutText: { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },

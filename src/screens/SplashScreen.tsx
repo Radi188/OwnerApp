@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   Animated,
   StatusBar,
   Dimensions,
 } from 'react-native';
+import { Text } from '../components/Text';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { loadStoredTokens, usersApi } from '../services/api';
@@ -139,7 +139,7 @@ export default function SplashScreen() {
 
   return (
     <View style={s.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#6366F1" />
+      <StatusBar barStyle="light-content" backgroundColor="#0F766E" />
 
       <View style={[s.deco, s.decoTopRight]} />
       <View style={[s.deco, s.decoBottomLeft]} />
@@ -174,7 +174,7 @@ export default function SplashScreen() {
 const s = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#6366F1',
+    backgroundColor: '#0F766E',
     alignItems:      'center',
     justifyContent:  'center',
   },

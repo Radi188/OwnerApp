@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
-  Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
@@ -16,11 +14,14 @@ import {
   ActivityIndicator,
   Pressable,
 } from 'react-native';
+import { Text, TextInput } from '../components/Text';
+import { FieldShell, Input } from '../components/form';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import i18n from 'i18next';
 import { authApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { useNavigation } from '@react-navigation/native';
 import AppLogo from '../components/AppLogo';
 import {
   getAvailableBiometricType,
@@ -77,7 +78,7 @@ function PropertySheet({
 
         {loading ? (
           <View style={ps.center}>
-            <ActivityIndicator color="#6366F1" size="large" />
+            <ActivityIndicator color="#0F766E" size="large" />
             <Text style={ps.loadingText}>Loading properties…</Text>
           </View>
         ) : properties.length === 0 ? (
@@ -101,7 +102,7 @@ function PropertySheet({
                   activeOpacity={0.75}
                 >
                   <View style={[ps.rowIcon, isSelected && ps.rowIconSelected]}>
-                    <Icon name="business" size={18} color={isSelected ? '#FFFFFF' : '#6366F1'} />
+                    <Icon name="business" size={18} color={isSelected ? '#FFFFFF' : '#0F766E'} />
                   </View>
                   <View style={ps.rowInfo}>
                     <Text style={[ps.rowName, isSelected && ps.rowNameSelected]} numberOfLines={1}>
@@ -112,7 +113,7 @@ function PropertySheet({
                     )}
                   </View>
                   {isSelected
-                    ? <Icon name="checkmark-circle" size={22} color="#6366F1" />
+                    ? <Icon name="checkmark-circle" size={22} color="#0F766E" />
                     : <View style={ps.radio} />
                   }
                 </TouchableOpacity>
@@ -127,6 +128,7 @@ function PropertySheet({
 
 // ─── Login Screen ──────────────────────────────────────────────────────────────
 export default function LoginScreen() {
+  const navigation = useNavigation<any>();
   const { t }           = useTranslation();
   const [, forceUpdate] = useState(0);
   const auth            = useAuth();
@@ -134,7 +136,6 @@ export default function LoginScreen() {
 
   const [username,      setUsername]      = useState('');
   const [password,      setPassword]      = useState('');
-  const [showPass,      setShowPass]      = useState(false);
   const [loading,       setLoading]       = useState(false);
   const [error,         setError]         = useState('');
 
@@ -285,7 +286,7 @@ export default function LoginScreen() {
 
   return (
     <View style={s.root}>
-      <StatusBar barStyle="light-content" backgroundColor="#6366F1" />
+      <StatusBar barStyle="light-content" backgroundColor="#0F766E" />
 
       {/* ── Top indigo banner ── */}
       <View style={s.banner}>
@@ -332,79 +333,58 @@ export default function LoginScreen() {
             )}
 
             {/* Username */}
-            <View style={s.fieldGroup}>
-              <Text style={s.label}>{t('login.email')}</Text>
-              <View style={s.inputWrap}>
-                <Icon name="person-outline" size={18} color="#9CA3AF" style={s.inputIcon} />
-                <TextInput
-                  style={s.input}
-                  placeholder={t('login.emailPlaceholder')}
-                  placeholderTextColor="#D1D5DB"
-                  value={username}
-                  onChangeText={v => {
-                    setUsername(v);
-                    setError('');
-                    setProperties([]);
-                    setSelectedProp(null);
-                    lastLookupRef.current = '';
-                  }}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  returnKeyType="next"
-                  onEndEditing={handleUsernameLookup}
-                  onSubmitEditing={() => { handleUsernameLookup(); passwordRef.current?.focus(); }}
-                />
-              </View>
-            </View>
+            <Input
+              label={t('login.email')}
+              icon="person-outline"
+              placeholder={t('login.emailPlaceholder')}
+              value={username}
+              onChangeText={v => {
+                setUsername(v);
+                setError('');
+                setProperties([]);
+                setSelectedProp(null);
+                lastLookupRef.current = '';
+              }}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="next"
+              onEndEditing={handleUsernameLookup}
+              onSubmitEditing={() => { handleUsernameLookup(); passwordRef.current?.focus(); }}
+            />
 
-            {/* Password */}
-            <View style={s.fieldGroup}>
-              <Text style={s.label}>{t('login.password')}</Text>
-              <View style={s.inputWrap}>
-                <Icon name="lock-closed-outline" size={18} color="#9CA3AF" style={s.inputIcon} />
-                <TextInput
-                  ref={passwordRef}
-                  style={[s.input, s.inputPassword]}
-                  placeholder={t('login.passwordPlaceholder')}
-                  placeholderTextColor="#D1D5DB"
-                  value={password}
-                  onChangeText={v => { setPassword(v); setError(''); }}
-                  secureTextEntry={!showPass}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  returnKeyType="done"
-                  onSubmitEditing={handleLogin}
-                />
-                <TouchableOpacity style={s.eyeBtn} activeOpacity={0.7} onPress={() => setShowPass(v => !v)}>
-                  <Icon name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color="#9CA3AF" />
-                </TouchableOpacity>
-              </View>
-            </View>
+            {/* Password (eye toggle is built into Input) */}
+            <Input
+              ref={passwordRef}
+              label={t('login.password')}
+              placeholder={t('login.passwordPlaceholder')}
+              value={password}
+              onChangeText={v => { setPassword(v); setError(''); }}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="done"
+              onSubmitEditing={handleLogin}
+            />
 
-            {/* Property selector */}
-            <View style={s.fieldGroup}>
-              <Text style={s.label}>Property</Text>
-              <TouchableOpacity
-                style={s.inputWrap}
-                activeOpacity={0.8}
-                onPress={openPropertySheet}
-              >
-                <Icon name="business-outline" size={18} color="#9CA3AF" style={s.inputIcon} />
-                <Text style={[s.input, s.propSelectText, !selectedProp && s.propPlaceholder]}>
-                  {selectedProp ? selectedProp.name : 'Select a property…'}
-                </Text>
-                {propLoading
-                  ? <ActivityIndicator size="small" color="#6366F1" style={{ marginRight: 4 }} />
-                  : <Icon name="chevron-down" size={16} color="#9CA3AF" />
-                }
-              </TouchableOpacity>
-            </View>
+            {/* Property selector — same field look, opens the property sheet */}
+            <FieldShell
+              label={t('login.property')}
+              icon="business-outline"
+              focused={sheetVisible}
+              filled={!!selectedProp}
+              onPress={openPropertySheet}
+              right={propLoading
+                ? <ActivityIndicator size="small" color="#0F766E" />
+                : <Icon name="chevron-down" size={18} color="#9CA3AF" />}
+            >
+              {selectedProp ? <Text style={s.propValue} numberOfLines={1}>{selectedProp.name}</Text> : null}
+            </FieldShell>
 
             {/* Forgot password */}
             <TouchableOpacity
               style={s.forgotBtn}
               activeOpacity={0.7}
-              onPress={() => Alert.alert(t('login.forgotPassword'), t('login.forgotPasswordMsg'))}
+              onPress={() => navigation.navigate('ForgotPassword')}
             >
               <Text style={s.forgotText}>{t('login.forgotPassword')}</Text>
             </TouchableOpacity>
@@ -435,13 +415,13 @@ export default function LoginScreen() {
                 disabled={bioLoading}
               >
                 {bioLoading ? (
-                  <ActivityIndicator color="#6366F1" size="small" />
+                  <ActivityIndicator color="#0F766E" size="small" />
                 ) : (
                   <>
                     <Icon
                       name={bioType === 'FaceID' ? 'scan-outline' : 'finger-print-outline'}
                       size={20}
-                      color="#6366F1"
+                      color="#0F766E"
                     />
                     <Text style={s.bioBtnText}>
                       Sign in with {bioType}
@@ -469,11 +449,12 @@ export default function LoginScreen() {
 
 // ─── Styles ────────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#6366F1' },
+  propValue: { fontSize: 15, color: '#0F172A' },
+  root: { flex: 1, backgroundColor: '#0F766E' },
   flex: { flex: 1 },
 
   banner: {
-    height: BANNER_H, backgroundColor: '#6366F1',
+    height: BANNER_H, backgroundColor: '#0F766E',
     alignItems: 'center', justifyContent: 'flex-end',
     paddingBottom: 32, overflow: 'hidden',
   },
@@ -504,7 +485,7 @@ const s = StyleSheet.create({
     minHeight: height * 0.65,
   },
 
-  welcome: { fontSize: 24, fontWeight: '800', color: '#111827', letterSpacing: -0.4 },
+  welcome: { fontSize: 24, fontWeight: '800', color: '#0F172A', letterSpacing: -0.4 },
   sub:     { fontSize: 14, color: '#9CA3AF', marginTop: 4, marginBottom: 24 },
 
   errorBox: {
@@ -514,27 +495,14 @@ const s = StyleSheet.create({
   },
   errorText: { flex: 1, fontSize: 13, color: '#DC2626', lineHeight: 18 },
 
-  fieldGroup: { marginBottom: 16 },
-  label:      { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 8 },
-  inputWrap: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F9FAFB', borderRadius: 14,
-    borderWidth: 1, borderColor: '#E5E7EB', paddingHorizontal: 14,
-  },
-  inputIcon:       { marginRight: 10 },
-  input:           { flex: 1, fontSize: 15, color: '#111827', paddingVertical: 14 },
-  inputPassword:   { paddingRight: 8 },
-  eyeBtn:          { padding: 4 },
-  propSelectText:  { paddingVertical: 14 },
-  propPlaceholder: { color: '#D1D5DB' },
 
   forgotBtn:  { alignSelf: 'flex-end', marginBottom: 28, marginTop: 2 },
-  forgotText: { fontSize: 13, color: '#6366F1', fontWeight: '600' },
+  forgotText: { fontSize: 13, color: '#0F766E', fontWeight: '600' },
 
   loginBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, backgroundColor: '#6366F1', borderRadius: 16, paddingVertical: 16,
-    shadowColor: '#6366F1', shadowOffset: { width: 0, height: 4 },
+    gap: 8, backgroundColor: '#0F766E', borderRadius: 16, paddingVertical: 16,
+    shadowColor: '#0F766E', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3, shadowRadius: 10, elevation: 6,
   },
   loginBtnDisabled: { opacity: 0.65 },
@@ -543,10 +511,10 @@ const s = StyleSheet.create({
   bioBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, marginTop: 14, paddingVertical: 14,
-    borderRadius: 16, borderWidth: 1.5, borderColor: '#E0E7FF',
+    borderRadius: 16, borderWidth: 1.5, borderColor: '#CCFBF1',
     backgroundColor: '#F5F3FF',
   },
-  bioBtnText: { fontSize: 15, fontWeight: '600', color: '#6366F1' },
+  bioBtnText: { fontSize: 15, fontWeight: '600', color: '#0F766E' },
 });
 
 // Property sheet styles
@@ -565,7 +533,7 @@ const ps = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginBottom: 4,
   },
-  title:    { fontSize: 17, fontWeight: '700', color: '#111827' },
+  title:    { fontSize: 17, fontWeight: '700', color: '#0F172A' },
   closeBtn: {
     width: 32, height: 32, borderRadius: 16,
     backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
@@ -586,12 +554,12 @@ const ps = StyleSheet.create({
   rowSelected: { backgroundColor: 'transparent' },
   rowIcon: {
     width: 44, height: 44, borderRadius: 13,
-    backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  rowIconSelected: { backgroundColor: '#6366F1' },
+  rowIconSelected: { backgroundColor: '#0F766E' },
   rowInfo:         { flex: 1 },
-  rowName:         { fontSize: 14, fontWeight: '700', color: '#111827' },
-  rowNameSelected: { color: '#4338CA' },
+  rowName:         { fontSize: 14, fontWeight: '700', color: '#0F172A' },
+  rowNameSelected: { color: '#115E59' },
   rowAddr:         { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
   radio: {
     width: 22, height: 22, borderRadius: 11,

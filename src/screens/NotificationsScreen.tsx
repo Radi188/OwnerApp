@@ -1,10 +1,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   Alert,
   Modal,
   KeyboardAvoidingView,
@@ -16,10 +14,17 @@ import {
   Pressable,
   ScrollView,
 } from 'react-native';
+import { Text } from '../components/Text';
+import { Input } from '../components/form';
+import { SearchBar } from '../components/ui';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
-import { notificationsApi, announcementsApi, contractsApi } from '../services/api';
+import { notificationsApi, announcementsApi, contractsApi, pickList } from '../services/api';
+import { BackButton } from '../components/ui';
+
+const normNotifs = (res: any) => pickList(res, 'notifications').map((n: any) => ({ ...n, isRead: n.isRead ?? !!n.readAt }));
+const normAnns = (res: any) => pickList(res, 'announcements', 'data');
 import { useBadges } from '../context/BadgeContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -48,7 +53,7 @@ type DetailItem =
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CATEGORY_META: Record<NotifCategory, { icon: string; iconBg: string; iconColor: string; label: string }> = {
-  Announcement: { icon: 'megaphone',           iconBg: '#EEF2FF', iconColor: '#6366F1', label: 'Announcement' },
+  Announcement: { icon: 'megaphone',           iconBg: '#F0FDFA', iconColor: '#0F766E', label: 'Announcement' },
   Invoice:      { icon: 'receipt',             iconBg: '#DBEAFE', iconColor: '#2563EB', label: 'Invoice' },
   Maintenance:  { icon: 'construct',           iconBg: '#FEF9C3', iconColor: '#CA8A04', label: 'Maintenance' },
   General:      { icon: 'chatbubble-ellipses', iconBg: '#F0FDF4', iconColor: '#16A34A', label: 'General' },
@@ -72,8 +77,8 @@ const PUSH_TEMPLATES = [
   { id: 'maintenance_upd', icon: 'construct',         iconBg: '#FEF9C3', iconColor: '#CA8A04', label: 'Maintenance Update',  category: 'Maintenance'  as NotifCategory, title: 'Maintenance Request Update',          body: '{{greeting}}your maintenance request has been reviewed and is now being processed. Our team will contact you shortly.' },
 ];
 const ANNOUNCE_TEMPLATES = [
-  { id: 'water_cut',  icon: 'water',            iconBg: '#EEF2FF', iconColor: '#6366F1', label: 'Water Interruption',  category: 'Announcement' as NotifCategory, title: 'Temporary Water Supply Interruption', body: '{{greeting}}water supply will be temporarily interrupted for scheduled maintenance. We apologize for the inconvenience.' },
-  { id: 'inspection', icon: 'shield-checkmark', iconBg: '#EEF2FF', iconColor: '#6366F1', label: 'Building Inspection', category: 'Announcement' as NotifCategory, title: 'Building Inspection Notice',          body: '{{greeting}}a routine building inspection is scheduled. Please ensure your unit is accessible. Thank you.' },
+  { id: 'water_cut',  icon: 'water',            iconBg: '#F0FDFA', iconColor: '#0F766E', label: 'Water Interruption',  category: 'Announcement' as NotifCategory, title: 'Temporary Water Supply Interruption', body: '{{greeting}}water supply will be temporarily interrupted for scheduled maintenance. We apologize for the inconvenience.' },
+  { id: 'inspection', icon: 'shield-checkmark', iconBg: '#F0FDFA', iconColor: '#0F766E', label: 'Building Inspection', category: 'Announcement' as NotifCategory, title: 'Building Inspection Notice',          body: '{{greeting}}a routine building inspection is scheduled. Please ensure your unit is accessible. Thank you.' },
   { id: 'holiday',    icon: 'sunny',            iconBg: '#F0FDF4', iconColor: '#16A34A', label: 'Holiday Closure',     category: 'General'      as NotifCategory, title: 'Office Closure — Public Holiday',     body: '{{greeting}}our office will be closed during the upcoming public holiday. Normal operations resume on the next working day.' },
 ];
 
@@ -156,7 +161,7 @@ function AnnounceCard({ item, onPress }: { item: AnnouncementItem; onPress: (ite
     <TouchableOpacity style={ac.card} activeOpacity={0.75} onPress={() => onPress(item)}>
       <View style={ac.inner}>
         <View style={ac.iconWrap}>
-          <Icon name="megaphone" size={20} color="#6366F1" />
+          <Icon name="megaphone" size={20} color="#0F766E" />
         </View>
         <View style={ac.body}>
           <View style={ac.topRow}>
@@ -205,7 +210,7 @@ function DetailSheet({ item, visible, onClose }: { item: DetailItem | null; visi
     pillLabel = meta.label; pillBg = meta.iconBg; pillColor = meta.iconColor;
   } else {
     const aud = AUDIENCE_META[(item.data as AnnouncementItem).audience] ?? AUDIENCE_META.all;
-    icon = 'megaphone'; iconBg = '#EEF2FF'; iconColor = '#6366F1';
+    icon = 'megaphone'; iconBg = '#F0FDFA'; iconColor = '#0F766E';
     pillLabel = aud.label; pillBg = aud.bg; pillColor = aud.color; pillIcon = aud.icon;
   }
 
@@ -458,7 +463,7 @@ function ComposeSheet({
                     activeOpacity={0.8}
                   >
                     <View style={[cs.targetIconWrap, pushActive && cs.targetIconPushActive]}>
-                      <Icon name="notifications" size={16} color={pushActive ? '#fff' : '#6366F1'} />
+                      <Icon name="notifications" size={16} color={pushActive ? '#fff' : '#0F766E'} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[cs.targetTitle, pushActive && cs.targetTitleActive]}>Push Notification</Text>
@@ -516,7 +521,7 @@ function ComposeSheet({
                     <View style={cs.recipRow}>
                       {(['all', 'unit'] as const).map(r => (
                         <TouchableOpacity key={r} style={[cs.recipBtn, recipient === r && cs.recipBtnActive]} onPress={() => { setRecipient(r); if (r === 'all') setSelectedUnits([]); }} activeOpacity={0.8}>
-                          <Icon name={r === 'all' ? 'people-outline' : 'home-outline'} size={14} color={recipient === r ? '#6366F1' : '#9CA3AF'} />
+                          <Icon name={r === 'all' ? 'people-outline' : 'home-outline'} size={14} color={recipient === r ? '#0F766E' : '#9CA3AF'} />
                           <Text style={[cs.recipText, recipient === r && cs.recipTextActive]}>
                             {r === 'all' ? 'All Tenants' : selectedUnits.length > 0 ? `${selectedUnits.length} unit${selectedUnits.length > 1 ? 's' : ''}` : 'Specific Units'}
                           </Text>
@@ -533,7 +538,7 @@ function ComposeSheet({
                     <View style={cs.recipRow}>
                       {([['all', 'All', 'people-outline'], ['tenant', 'Tenants', 'home-outline'], ['employee', 'Staff', 'briefcase-outline']] as const).map(([key, label, icon]) => (
                         <TouchableOpacity key={key} style={[cs.recipBtn, { flex: key === 'employee' ? 1 : 1 }, audience === key && cs.recipBtnActive]} onPress={() => { setAudience(key); if (key !== 'tenant') setSelectedUnits([]); }} activeOpacity={0.8}>
-                          <Icon name={icon} size={14} color={audience === key ? '#6366F1' : '#9CA3AF'} />
+                          <Icon name={icon} size={14} color={audience === key ? '#0F766E' : '#9CA3AF'} />
                           <Text style={[cs.recipText, audience === key && cs.recipTextActive]}>{label}</Text>
                         </TouchableOpacity>
                       ))}
@@ -552,7 +557,7 @@ function ComposeSheet({
                             <View key={u.unitId} style={cs.chip}>
                               <Text style={cs.chipText}>Unit {u.unitCode}</Text>
                               <TouchableOpacity onPress={() => toggleUnit(u)} activeOpacity={0.7} hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}>
-                                <Icon name="close-circle" size={14} color="#6366F1" />
+                                <Icon name="close-circle" size={14} color="#0F766E" />
                               </TouchableOpacity>
                             </View>
                           ))}
@@ -575,22 +580,18 @@ function ComposeSheet({
                     {!unitsLoading && units.length > 0 && (
                       <View style={cs.selectAllRow}>
                         <TouchableOpacity onPress={() => setSelectedUnits(selectedUnits.length === units.length ? [] : [...units])} activeOpacity={0.7} style={cs.selectAllBtn}>
-                          <Icon name={selectedUnits.length === units.length ? 'checkbox' : 'square-outline'} size={16} color="#6366F1" />
+                          <Icon name={selectedUnits.length === units.length ? 'checkbox' : 'square-outline'} size={16} color="#0F766E" />
                           <Text style={cs.selectAllText}>{selectedUnits.length === units.length ? 'Deselect All' : `Select All (${units.length})`}</Text>
                         </TouchableOpacity>
                       </View>
                     )}
 
                     {/* Search */}
-                    <View style={cs.unitSearch}>
-                      <Icon name="search-outline" size={15} color="#9CA3AF" />
-                      <TextInput style={cs.unitSearchInput} placeholder="Search unit or tenant…" placeholderTextColor="#9CA3AF" value={unitSearch} onChangeText={setUnitSearch} autoCapitalize="none" />
-                      {unitSearch.length > 0 && <TouchableOpacity onPress={() => setUnitSearch('')} activeOpacity={0.7}><Icon name="close-circle" size={15} color="#9CA3AF" /></TouchableOpacity>}
-                    </View>
+                    <SearchBar value={unitSearch} onChangeText={setUnitSearch} placeholder="Search unit or tenant…" style={{ marginBottom: 10 }} />
 
                     {/* Unit rows */}
                     {unitsLoading ? (
-                      <ActivityIndicator color="#6366F1" style={{ marginVertical: 16 }} />
+                      <ActivityIndicator color="#0F766E" style={{ marginVertical: 16 }} />
                     ) : (
                       <View style={cs.unitList}>
                         {filteredUnits.map((u, i) => {
@@ -599,7 +600,7 @@ function ComposeSheet({
                             <View key={u.contractId}>
                               <TouchableOpacity style={[cs.unitRow, isSel && cs.unitRowSel]} onPress={() => toggleUnit(u)} activeOpacity={0.75}>
                                 <View style={[cs.unitCheckbox, isSel && cs.unitCheckboxSel]}>{isSel && <Icon name="checkmark" size={12} color="#fff" />}</View>
-                                <View style={[cs.unitAvatar, isSel && cs.unitAvatarSel]}><Icon name="home" size={13} color={isSel ? '#fff' : '#6366F1'} /></View>
+                                <View style={[cs.unitAvatar, isSel && cs.unitAvatarSel]}><Icon name="home" size={13} color={isSel ? '#fff' : '#0F766E'} /></View>
                                 <View style={cs.unitInfo}>
                                   <Text style={[cs.unitCode, isSel && cs.unitCodeSel]}>Unit {u.unitCode}{u.floorNumber ? ` · F${u.floorNumber}` : ''}</Text>
                                   <Text style={cs.unitTenant} numberOfLines={1}>{u.tenantName}</Text>
@@ -618,8 +619,8 @@ function ComposeSheet({
                 <View style={cs.tplSection}>
                   {/* Push alert templates */}
                   <View style={cs.tplGroupHeader}>
-                    <View style={[cs.tplGroupIcon, { backgroundColor: '#EEF2FF' }]}>
-                      <Icon name="notifications" size={13} color="#6366F1" />
+                    <View style={[cs.tplGroupIcon, { backgroundColor: '#F0FDFA' }]}>
+                      <Icon name="notifications" size={13} color="#0F766E" />
                     </View>
                     <Text style={cs.tplGroupLabel}>Push Alert Templates</Text>
                   </View>
@@ -640,13 +641,12 @@ function ComposeSheet({
                 </View>
 
                 {/* ── Title ── */}
-                <Text style={cs.label}>Title</Text>
-                <TextInput style={cs.input} placeholder="Message title…" placeholderTextColor="#9CA3AF" value={title} onChangeText={setTitle} maxLength={80} returnKeyType="next" />
+                <View style={{ marginTop: 16 }}>
+                  <Input label="Title" placeholder="Message title…" value={title} onChangeText={setTitle} maxLength={80} returnKeyType="next" />
+                </View>
 
                 {/* ── Message ── */}
-                <Text style={cs.label}>Message</Text>
-                <TextInput style={[cs.input, cs.inputMulti]} placeholder="Write your message…" placeholderTextColor="#9CA3AF" value={body} onChangeText={setBody} multiline maxLength={500} textAlignVertical="top" />
-                <Text style={cs.charCount}>{body.length}/500</Text>
+                <Input label="Message" placeholder="Write your message…" value={body} onChangeText={setBody} multiline maxLength={500} />
               </View>
             }
           />
@@ -702,8 +702,8 @@ export default function NotificationsScreen() {
         notificationsApi.list(),
         announcementsApi.list(),
       ]);
-      if (nRes.status === 'fulfilled') setNotifications(nRes.value?.data?.notifications ?? []);
-      if (aRes.status === 'fulfilled') setAnnouncements(aRes.value?.data?.announcements ?? []);
+      if (nRes.status === 'fulfilled') setNotifications(normNotifs(nRes.value));
+      if (aRes.status === 'fulfilled') setAnnouncements(normAnns(aRes.value));
       setLoading(false);
     })();
   }, []);
@@ -711,8 +711,8 @@ export default function NotificationsScreen() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     const [nRes, aRes] = await Promise.allSettled([notificationsApi.list(), announcementsApi.list()]);
-    if (nRes.status === 'fulfilled') setNotifications(nRes.value?.data?.notifications ?? []);
-    if (aRes.status === 'fulfilled') setAnnouncements(aRes.value?.data?.announcements ?? []);
+    if (nRes.status === 'fulfilled') setNotifications(normNotifs(nRes.value));
+    if (aRes.status === 'fulfilled') setAnnouncements(normAnns(aRes.value));
     setRefreshing(false);
   }, []);
 
@@ -786,6 +786,7 @@ export default function NotificationsScreen() {
       {/* ── Header ── */}
       <View style={[s.header, { paddingTop: insets.top + 14 }]}>
         <View style={s.headerRow}>
+          <BackButton />
           <View style={s.headerTitleBlock}>
             <Text style={s.headerTitle}>{t('notifications.title')}</Text>
             <Text style={s.headerSub}>Push notifications & announcements</Text>
@@ -808,7 +809,7 @@ export default function NotificationsScreen() {
               <Icon
                 name={seg === 'notifications' ? 'notifications-outline' : 'megaphone-outline'}
                 size={14}
-                color={segment === seg ? '#6366F1' : '#9CA3AF'}
+                color={segment === seg ? '#0F766E' : '#9CA3AF'}
               />
               <Text style={[s.segText, segment === seg && s.segTextActive]}>
                 {seg === 'notifications' ? 'Notifications' : 'Announcements'}
@@ -833,7 +834,7 @@ export default function NotificationsScreen() {
               <Text style={s.unreadBadgeText}>{unreadCount} unread</Text>
             </View>
             <TouchableOpacity onPress={handleMarkAllRead} style={s.markAllBtn} activeOpacity={0.7}>
-              <Icon name="checkmark-done-outline" size={13} color="#6366F1" />
+              <Icon name="checkmark-done-outline" size={13} color="#0F766E" />
               <Text style={s.markAllText}>Mark all as read</Text>
             </TouchableOpacity>
           </View>
@@ -868,7 +869,7 @@ export default function NotificationsScreen() {
 
       {/* ── List ── */}
       {loading ? (
-        <ActivityIndicator color="#6366F1" style={{ marginTop: 48 }} />
+        <ActivityIndicator color="#0F766E" style={{ marginTop: 48 }} />
       ) : (
         <FlatList
           data={segment === 'notifications' ? notifListData : annListData}
@@ -876,7 +877,7 @@ export default function NotificationsScreen() {
           style={s.list}
           contentContainerStyle={s.listContent}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#6366F1']} tintColor="#6366F1" />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#0F766E']} tintColor="#0F766E" />}
           renderItem={({ item }) => {
             if (item.kind === 'header') return <SectionLabel label={item.label} />;
             if (item.kind === 'notif')  return <NotifCard item={item.data as NotifItem} onPress={handleOpenNotif} />;
@@ -885,7 +886,7 @@ export default function NotificationsScreen() {
           ListEmptyComponent={
             <View style={s.emptyWrap}>
               <View style={s.emptyIconWrap}>
-                <Icon name={segment === 'notifications' ? 'notifications-off-outline' : 'megaphone-outline'} size={40} color="#C7D2FE" />
+                <Icon name={segment === 'notifications' ? 'notifications-off-outline' : 'megaphone-outline'} size={40} color="#99F6E4" />
               </View>
               <Text style={s.emptyTitle}>No {segment === 'notifications' ? 'notifications' : 'announcements'}</Text>
               <Text style={s.emptySubtitle}>
@@ -915,7 +916,7 @@ export default function NotificationsScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F6FA' },
+  container: { flex: 1, backgroundColor: '#F4F6F8' },
 
   header: {
     backgroundColor: '#FFFFFF',
@@ -926,47 +927,47 @@ const s = StyleSheet.create({
   },
   headerRow:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTitleBlock: { flex: 1, marginRight: 12 },
-  headerTitle:      { fontSize: 22, fontWeight: '800', color: '#111827', letterSpacing: -0.5 },
+  headerTitle:      { fontSize: 22, fontWeight: '800', color: '#0F172A', letterSpacing: -0.5 },
   headerSub:        { fontSize: 12, color: '#9CA3AF', fontWeight: '500', marginTop: 2 },
   headerMeta:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  unreadBadge:      { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#EEF2FF', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
-  unreadDot:        { width: 7, height: 7, borderRadius: 4, backgroundColor: '#6366F1' },
-  unreadBadgeText:  { fontSize: 12, fontWeight: '700', color: '#6366F1' },
+  unreadBadge:      { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F0FDFA', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
+  unreadDot:        { width: 7, height: 7, borderRadius: 4, backgroundColor: '#0F766E' },
+  unreadBadgeText:  { fontSize: 12, fontWeight: '700', color: '#0F766E' },
   markAllBtn:       { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  markAllText:      { fontSize: 12, fontWeight: '600', color: '#6366F1' },
-  composeBtn:       { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#6366F1', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 9 },
+  markAllText:      { fontSize: 12, fontWeight: '600', color: '#0F766E' },
+  composeBtn:       { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#0F766E', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 9 },
   composeBtnText:   { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
 
   segmentRow:         { flexDirection: 'row', gap: 8 },
   segBtn:             { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 9, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: 1.5, borderColor: 'transparent' },
-  segBtnActive:       { backgroundColor: '#EEF2FF', borderColor: '#C7D2FE' },
+  segBtnActive:       { backgroundColor: '#F0FDFA', borderColor: '#99F6E4' },
   segText:            { fontSize: 13, fontWeight: '600', color: '#9CA3AF' },
-  segTextActive:      { color: '#6366F1', fontWeight: '700' },
+  segTextActive:      { color: '#0F766E', fontWeight: '700' },
   segBadge:           { backgroundColor: '#DC2626', borderRadius: 8, paddingHorizontal: 5, paddingVertical: 2, minWidth: 18, alignItems: 'center' },
-  segBadgeIndigo:     { backgroundColor: '#EEF2FF' },
+  segBadgeIndigo:     { backgroundColor: '#F0FDFA' },
   segBadgeText:       { fontSize: 10, fontWeight: '700', color: '#fff' },
-  segBadgeTextIndigo: { color: '#6366F1' },
+  segBadgeTextIndigo: { color: '#0F766E' },
 
   tabsBar:     { backgroundColor: '#FFFFFF', maxHeight: 52, flexGrow: 0 },
   tabsContent: { paddingBottom: 12, paddingHorizontal: 16, gap: 8 },
   tab:         { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 13, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: 'transparent' },
-  tabActive:   { backgroundColor: '#EEF2FF', borderColor: '#6366F1' },
+  tabActive:   { backgroundColor: '#F0FDFA', borderColor: '#0F766E' },
   tabText:     { fontSize: 12, fontWeight: '600', color: '#6B7280' },
-  tabTextActive: { color: '#6366F1' },
+  tabTextActive: { color: '#0F766E' },
 
   list:        { flex: 1 },
   listContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
 
   emptyWrap:    { alignItems: 'center', paddingTop: 64, gap: 10 },
-  emptyIconWrap:{ width: 80, height: 80, borderRadius: 24, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  emptyIconWrap:{ width: 80, height: 80, borderRadius: 24, backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
   emptyTitle:   { fontSize: 16, fontWeight: '800', color: '#374151' },
   emptySubtitle:{ fontSize: 13, color: '#9CA3AF' },
 });
 
 const nc = StyleSheet.create({
   card:        { backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden', flexDirection: 'row', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, marginBottom: 10 },
-  cardUnread:  { shadowColor: '#6366F1', shadowOpacity: 0.08 },
-  accentBar:   { width: 4, backgroundColor: '#6366F1' },
+  cardUnread:  { shadowColor: '#0F766E', shadowOpacity: 0.08 },
+  accentBar:   { width: 4, backgroundColor: '#0F766E' },
   inner:       { flex: 1, flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 14, gap: 12 },
   iconWrap:    { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   body:        { flex: 1 },
@@ -975,21 +976,21 @@ const nc = StyleSheet.create({
   pillText:    { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
   time:        { fontSize: 11, color: '#9CA3AF', fontWeight: '500' },
   title:       { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 3, lineHeight: 20 },
-  titleUnread: { fontWeight: '800', color: '#111827' },
+  titleUnread: { fontWeight: '800', color: '#0F172A' },
   msg:         { fontSize: 12, color: '#6B7280', lineHeight: 18 },
-  dot:         { width: 8, height: 8, borderRadius: 4, backgroundColor: '#6366F1', flexShrink: 0, marginTop: 6 },
+  dot:         { width: 8, height: 8, borderRadius: 4, backgroundColor: '#0F766E', flexShrink: 0, marginTop: 6 },
 });
 
 const ac = StyleSheet.create({
   card:    { backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, marginBottom: 10 },
   inner:   { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 14, gap: 12 },
-  iconWrap:{ width: 46, height: 46, borderRadius: 14, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  iconWrap:{ width: 46, height: 46, borderRadius: 14, backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   body:    { flex: 1 },
   topRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 },
   pill:    { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 7, paddingHorizontal: 8, paddingVertical: 3 },
   pillText:{ fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
   time:    { fontSize: 11, color: '#9CA3AF', fontWeight: '500' },
-  title:   { fontSize: 14, fontWeight: '800', color: '#111827', marginBottom: 4, lineHeight: 20 },
+  title:   { fontSize: 14, fontWeight: '800', color: '#0F172A', marginBottom: 4, lineHeight: 20 },
   content: { fontSize: 12, color: '#6B7280', lineHeight: 18 },
 });
 
@@ -1004,7 +1005,7 @@ const ds = StyleSheet.create({
   pillText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
   dateRow:  { flexDirection: 'row', alignItems: 'center', gap: 5 },
   dateText: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
-  title:    { fontSize: 19, fontWeight: '800', color: '#111827', lineHeight: 26, letterSpacing: -0.3 },
+  title:    { fontSize: 19, fontWeight: '800', color: '#0F172A', lineHeight: 26, letterSpacing: -0.3 },
   divider:  { height: StyleSheet.hairlineWidth, backgroundColor: '#E5E7EB', marginVertical: 16 },
   body:     { fontSize: 15, color: '#374151', lineHeight: 23 },
   doneBtn:  { backgroundColor: '#F3F4F6', borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 4 },
@@ -1024,9 +1025,9 @@ const cs = StyleSheet.create({
 
   header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
   closeBtn:    { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '700', color: '#111827' },
-  sendBtn:     { backgroundColor: '#6366F1', borderRadius: 20, paddingHorizontal: 20, paddingVertical: 8, minWidth: 64, alignItems: 'center' },
-  sendBtnOff:  { backgroundColor: '#A5B4FC' },
+  headerTitle: { fontSize: 17, fontWeight: '700', color: '#0F172A' },
+  sendBtn:     { backgroundColor: '#0F766E', borderRadius: 20, paddingHorizontal: 20, paddingVertical: 8, minWidth: 64, alignItems: 'center' },
+  sendBtnOff:  { backgroundColor: '#5EEAD4' },
   sendBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 
   form:      { paddingBottom: 24 },
@@ -1035,17 +1036,17 @@ const cs = StyleSheet.create({
   // Publish targets
   targetRow:          { gap: 10 },
   targetBtn:          { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16, borderWidth: 1.5, borderColor: '#E5E7EB', backgroundColor: '#FAFAFA' },
-  targetBtnPushActive:{ borderColor: '#C7D2FE', backgroundColor: '#EEF2FF' },
+  targetBtnPushActive:{ borderColor: '#99F6E4', backgroundColor: '#F0FDFA' },
   targetBtnAnnActive: { borderColor: '#DDD6FE', backgroundColor: '#F5F3FF' },
-  targetIconWrap:     { width: 38, height: 38, borderRadius: 11, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  targetIconPushActive: { backgroundColor: '#6366F1' },
+  targetIconWrap:     { width: 38, height: 38, borderRadius: 11, backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  targetIconPushActive: { backgroundColor: '#0F766E' },
   targetIconAnnActive:  { backgroundColor: '#7C3AED' },
   targetTitle:        { fontSize: 14, fontWeight: '700', color: '#374151' },
-  targetTitleActive:  { color: '#4338CA' },
+  targetTitleActive:  { color: '#115E59' },
   targetTitleAnnActive: { color: '#5B21B6' },
   targetSub:          { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
   targetCheck:        { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center', flexShrink: 0, backgroundColor: '#FFFFFF' },
-  targetCheckActive:  { backgroundColor: '#6366F1', borderColor: '#6366F1' },
+  targetCheckActive:  { backgroundColor: '#0F766E', borderColor: '#0F766E' },
   targetCheckAnnActive: { backgroundColor: '#7C3AED', borderColor: '#7C3AED' },
 
   bothHint:     { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: '#F5F3FF', borderRadius: 10, padding: 10, marginTop: 10 },
@@ -1059,36 +1060,34 @@ const cs = StyleSheet.create({
   // Recipients
   recipRow:       { flexDirection: 'row', gap: 8 },
   recipBtn:       { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 11, borderRadius: 12, borderWidth: 1.5, borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
-  recipBtnActive: { borderColor: '#6366F1', backgroundColor: '#EEF2FF' },
+  recipBtnActive: { borderColor: '#0F766E', backgroundColor: '#F0FDFA' },
   recipText:      { fontSize: 12, fontWeight: '600', color: '#9CA3AF' },
-  recipTextActive:{ color: '#6366F1', fontWeight: '700' },
+  recipTextActive:{ color: '#0F766E', fontWeight: '700' },
 
   // Unit picker
   unitPickerWrap:  { marginTop: 12, borderRadius: 16, borderWidth: 1.5, borderColor: '#E5E7EB', overflow: 'hidden', backgroundColor: '#FAFAFA' },
-  selectedChipsWrap: { backgroundColor: '#EEF2FF', borderBottomWidth: 1, borderBottomColor: '#E0E7FF', paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8, gap: 8 },
+  selectedChipsWrap: { backgroundColor: '#F0FDFA', borderBottomWidth: 1, borderBottomColor: '#CCFBF1', paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8, gap: 8 },
   selectedChipsRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  chip:            { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#C7D2FE', paddingHorizontal: 10, paddingVertical: 5 },
-  chipText:        { fontSize: 12, fontWeight: '600', color: '#4338CA' },
+  chip:            { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#99F6E4', paddingHorizontal: 10, paddingVertical: 5 },
+  chipText:        { fontSize: 12, fontWeight: '600', color: '#115E59' },
   chipsFooter:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  chipsCount:      { fontSize: 11, color: '#6366F1', fontWeight: '600' },
+  chipsCount:      { fontSize: 11, color: '#0F766E', fontWeight: '600' },
   chipsClear:      { fontSize: 11, color: '#9CA3AF', fontWeight: '600' },
   unitHint:        { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
   unitHintText:    { fontSize: 12, color: '#9CA3AF' },
-  selectAllRow:    { paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#F9FAFB', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
+  selectAllRow:    { paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#F8FAFC', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
   selectAllBtn:    { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  selectAllText:   { fontSize: 13, fontWeight: '600', color: '#6366F1' },
-  unitSearch:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F3F4F6', backgroundColor: '#fff' },
-  unitSearchInput: { flex: 1, fontSize: 13, color: '#111827', padding: 0 },
+  selectAllText:   { fontSize: 13, fontWeight: '600', color: '#0F766E' },
   unitList:        { maxHeight: 200 },
   unitRow:         { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: '#fff' },
   unitRowSel:      { backgroundColor: '#F5F3FF' },
   unitCheckbox:    { width: 20, height: 20, borderRadius: 6, borderWidth: 1.5, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center', flexShrink: 0, backgroundColor: '#fff' },
-  unitCheckboxSel: { backgroundColor: '#6366F1', borderColor: '#6366F1' },
-  unitAvatar:      { width: 32, height: 32, borderRadius: 9, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  unitAvatarSel:   { backgroundColor: '#6366F1' },
+  unitCheckboxSel: { backgroundColor: '#0F766E', borderColor: '#0F766E' },
+  unitAvatar:      { width: 32, height: 32, borderRadius: 9, backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  unitAvatarSel:   { backgroundColor: '#0F766E' },
   unitInfo:        { flex: 1 },
-  unitCode:        { fontSize: 13, fontWeight: '700', color: '#111827' },
-  unitCodeSel:     { color: '#4338CA' },
+  unitCode:        { fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  unitCodeSel:     { color: '#115E59' },
   unitTenant:      { fontSize: 11, color: '#9CA3AF', marginTop: 1 },
   unitDivider:     { height: StyleSheet.hairlineWidth, backgroundColor: '#F3F4F6', marginHorizontal: 14 },
 
@@ -1103,13 +1102,10 @@ const cs = StyleSheet.create({
   tplRowLast:     { borderBottomWidth: 0 },
   tplIcon:        { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   tplBody:        { flex: 1 },
-  tplLabel:       { fontSize: 13, fontWeight: '700', color: '#111827', marginBottom: 4 },
-  tplLabelActive: { color: '#4338CA' },
+  tplLabel:       { fontSize: 13, fontWeight: '700', color: '#0F172A', marginBottom: 4 },
+  tplLabelActive: { color: '#115E59' },
   tplCatPill:     { alignSelf: 'flex-start', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
   tplCatText:     { fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
 
   // Inputs
-  input:      { backgroundColor: '#F9FAFB', borderRadius: 14, borderWidth: 1.5, borderColor: '#E5E7EB', paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, color: '#111827' },
-  inputMulti: { minHeight: 100, paddingTop: 12 },
-  charCount:  { fontSize: 11, color: '#9CA3AF', textAlign: 'right', marginTop: 5 },
 });

@@ -1,18 +1,19 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
+import { Text } from '../components/Text';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
-import { maintenanceApi } from '../services/api';
+import { maintenanceApi, pickList } from '../services/api';
+import { BackButton } from '../components/ui';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type MaintenanceStatus = 'pending' | 'assigned' | 'in_progress' | 'completed';
@@ -41,7 +42,7 @@ const STATUS_META: Record<string, { label: string; color: string; bg: string; ic
 
 const PRIORITY_META: Record<string, { color: string; bg: string; dot: string }> = {
   low:    { color: '#16A34A', bg: '#DCFCE7', dot: '#16A34A' },
-  medium: { color: '#6366F1', bg: '#EEF2FF', dot: '#6366F1' },
+  medium: { color: '#0F766E', bg: '#F0FDFA', dot: '#0F766E' },
   high:   { color: '#EA580C', bg: '#FFF7ED', dot: '#EA580C' },
   urgent: { color: '#DC2626', bg: '#FEF2F2', dot: '#DC2626' },
 };
@@ -52,7 +53,7 @@ const TYPE_META: Record<string, { icon: string; bg: string; color: string }> = {
   structural: { icon: 'construct-outline',     bg: '#FEE2E2', color: '#DC2626' },
   appliance:  { icon: 'hardware-chip-outline', bg: '#DCFCE7', color: '#16A34A' },
   cleaning:   { icon: 'brush-outline',         bg: '#F5F3FF', color: '#7C3AED' },
-  other:      { icon: 'build-outline',         bg: '#EEF2FF', color: '#6366F1' },
+  other:      { icon: 'build-outline',         bg: '#F0FDFA', color: '#0F766E' },
 };
 
 const TABS: { key: 'all' | MaintenanceStatus; label: string }[] = [
@@ -86,7 +87,7 @@ export default function RequestsScreen() {
   const loadData = useCallback(async () => {
     try {
       const res = await maintenanceApi.list();
-      setItems(res?.data?.maintenances ?? []);
+      setItems(pickList(res, 'maintenanceRequests', 'maintenances'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -106,7 +107,8 @@ export default function RequestsScreen() {
       {/* ── Header ── */}
       <View style={[s.header, { paddingTop: insets.top + 14 }]}>
         <View style={s.headerTop}>
-          <View>
+          <BackButton />
+          <View style={{ flex: 1 }}>
             <Text style={s.headerTitle}>{t('requests.title')}</Text>
             <Text style={s.headerSub}>Manage maintenance requests</Text>
           </View>
@@ -139,15 +141,15 @@ export default function RequestsScreen() {
             return (
               <TouchableOpacity
                 key={tab.key}
-                style={[s.tab, active && { backgroundColor: sm?.color ?? '#6366F1' }]}
+                style={[s.tab, active && { backgroundColor: sm?.color ?? '#0F766E' }]}
                 activeOpacity={0.75}
                 onPress={() => setActiveTab(tab.key)}
               >
                 {sm && <Icon name={sm.icon} size={12} color={active ? '#FFF' : sm.color} />}
                 <Text style={[s.tabText, active && s.tabTextActive]}>{tab.label}</Text>
                 {count > 0 && (
-                  <View style={[s.tabCount, active ? s.tabCountActive : { backgroundColor: sm?.bg ?? '#EEF2FF' }]}>
-                    <Text style={[s.tabCountText, { color: active ? (sm?.color ?? '#6366F1') : (sm?.color ?? '#6366F1') }]}>
+                  <View style={[s.tabCount, active ? s.tabCountActive : { backgroundColor: sm?.bg ?? '#F0FDFA' }]}>
+                    <Text style={[s.tabCountText, { color: active ? (sm?.color ?? '#0F766E') : (sm?.color ?? '#0F766E') }]}>
                       {count}
                     </Text>
                   </View>
@@ -160,20 +162,20 @@ export default function RequestsScreen() {
 
       {/* ── List ── */}
       {loading ? (
-        <ActivityIndicator color="#6366F1" style={{ marginTop: 60 }} />
+        <ActivityIndicator color="#0F766E" style={{ marginTop: 60 }} />
       ) : (
         <ScrollView
           style={s.scroll}
           contentContainerStyle={s.content}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#6366F1']} tintColor="#6366F1" />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#0F766E']} tintColor="#0F766E" />
           }
         >
           {filtered.length === 0 ? (
             <View style={s.emptyCard}>
               <View style={s.emptyIconWrap}>
-                <Icon name="construct-outline" size={28} color="#C7D2FE" />
+                <Icon name="construct-outline" size={28} color="#99F6E4" />
               </View>
               <Text style={s.emptyTitle}>No requests found</Text>
               <Text style={s.emptySub}>
@@ -209,7 +211,7 @@ export default function RequestsScreen() {
                           <View style={s.cardMetaRow}>
                             {req.unit && (
                               <View style={s.unitChip}>
-                                <Icon name="home-outline" size={10} color="#6366F1" />
+                                <Icon name="home-outline" size={10} color="#0F766E" />
                                 <Text style={s.unitChipText}>Unit {req.unit.unitCode}</Text>
                               </View>
                             )}
@@ -272,7 +274,7 @@ export default function RequestsScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F6FA' },
+  container: { flex: 1, backgroundColor: '#F4F6F8' },
   scroll:    { flex: 1 },
   content:   { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32, gap: 10 },
 
@@ -288,7 +290,7 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'flex-start',
     justifyContent: 'space-between', marginBottom: 14,
   },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: '#111827', letterSpacing: -0.5 },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: '#0F172A', letterSpacing: -0.5 },
   headerSub:   { fontSize: 12, color: '#9CA3AF', fontWeight: '500', marginTop: 2 },
   headerBadges: { flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 4 },
   urgentCountBadge: {
@@ -296,8 +298,8 @@ const s = StyleSheet.create({
     backgroundColor: '#FEF2F2', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 10,
   },
   urgentCountText: { fontSize: 11, fontWeight: '700', color: '#DC2626' },
-  openBadge: { backgroundColor: '#EEF2FF', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
-  openBadgeText: { fontSize: 11, fontWeight: '700', color: '#6366F1' },
+  openBadge: { backgroundColor: '#F0FDFA', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
+  openBadgeText: { fontSize: 11, fontWeight: '700', color: '#0F766E' },
 
   // Tabs
   tabsScroll: { marginBottom: 0 },
@@ -325,7 +327,7 @@ const s = StyleSheet.create({
   },
   emptyIconWrap: {
     width: 60, height: 60, borderRadius: 18,
-    backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', marginBottom: 4,
+    backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', marginBottom: 4,
   },
   emptyTitle: { fontSize: 15, fontWeight: '700', color: '#374151' },
   emptySub:   { fontSize: 13, color: '#9CA3AF', textAlign: 'center', paddingHorizontal: 32 },
@@ -353,14 +355,14 @@ const s = StyleSheet.create({
   cardMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   unitChip: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#EEF2FF', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6,
+    backgroundColor: '#F0FDFA', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6,
   },
-  unitChipText: { fontSize: 10, fontWeight: '700', color: '#6366F1' },
+  unitChipText: { fontSize: 10, fontWeight: '700', color: '#0F766E' },
   metaDot:      { fontSize: 10, color: '#D1D5DB' },
   metaText:     { fontSize: 10, color: '#9CA3AF', fontWeight: '500' },
   cardTime:     { fontSize: 10, color: '#9CA3AF', marginLeft: 'auto' as any },
 
-  cardDesc: { fontSize: 14, fontWeight: '700', color: '#111827', lineHeight: 20 },
+  cardDesc: { fontSize: 14, fontWeight: '700', color: '#0F172A', lineHeight: 20 },
 
   cardBottomRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 },
   typeChip: {

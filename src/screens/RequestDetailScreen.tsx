@@ -1,11 +1,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  TextInput,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -15,6 +13,8 @@ import {
   Keyboard,
   useWindowDimensions,
 } from 'react-native';
+import { Text, TextInput } from '../components/Text';
+import { Input } from '../components/form';
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -22,7 +22,8 @@ import {
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RequestsStackParamList } from '../navigation/AppNavigator';
-import { maintenanceApi, usersApi } from '../services/api';
+import { maintenanceApi, usersApi, pickOne } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 type MaintenanceStatus =
   | 'pending'
@@ -51,7 +52,7 @@ const PRIORITY_META: Record<
   { label: string; color: string; bg: string }
 > = {
   low: { label: 'Low', color: '#16A34A', bg: '#DCFCE7' },
-  medium: { label: 'Medium', color: '#6366F1', bg: '#EEF2FF' },
+  medium: { label: 'Medium', color: '#0F766E', bg: '#F0FDFA' },
   high: { label: 'High', color: '#EA580C', bg: '#FFF7ED' },
   urgent: { label: 'Urgent', color: '#DC2626', bg: '#FEF2F2' },
 };
@@ -70,6 +71,7 @@ function stepIndex(s: MaintenanceStatus): number {
 
 export default function RequestDetailScreen() {
   const navigation = useNavigation<any>();
+  const { can } = useAuth();
   const route = useRoute<RouteProp<RequestsStackParamList, 'RequestDetail'>>();
   const insets = useSafeAreaInsets();
   const requestId = route.params.requestId;
@@ -93,7 +95,6 @@ export default function RequestDetailScreen() {
   const [completeIsBillable, setCompleteIsBillable] = useState(false);
   const [completing, setCompleting]               = useState(false);
   const [keyboardVisible, setKeyboardVisible]     = useState(false);
-  const [isCostFocused, setIsCostFocused]         = useState(false);
 
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
@@ -104,7 +105,7 @@ export default function RequestDetailScreen() {
   const loadData = useCallback(async () => {
     try {
       const res = await maintenanceApi.get(requestId);
-      const m = res?.data?.maintenances ?? res?.data?.maintenance;
+      const m = pickOne<any>(res, 'maintenanceRequests', 'maintenanceRequest', 'maintenances', 'maintenance');
       if (m) {
         setItem(m);
         setStatus(m.status as MaintenanceStatus);
@@ -216,12 +217,46 @@ export default function RequestDetailScreen() {
         isBillable: completeIsBillable,
       }));
       setShowCompleteSheet(false);
+      // A cost creates an expense automatically (FRONTEND_GUIDE §14) — tell the user
+      if (cost != null && cost > 0) {
+        Alert.alert(
+          'Request completed',
+          'An expense of $' + cost.toFixed(2) + ' was recorded.'
+            + (completeIsBillable ? ' It will be added to the tenant\'s next invoice, or you can bill it now.' : ''),
+        );
+      }
     } catch (e: any) {
       Alert.alert('Error', e?.message ?? 'Failed to complete request.');
     } finally {
       setCompleting(false);
     }
   };
+
+  const [invoicing, setInvoicing] = useState(false);
+  const handleInvoiceNow = () => Alert.alert(
+    'Invoice now?',
+    'Creates a separate maintenance invoice (due in 3 days) instead of adding it to the next regular invoice.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Create invoice',
+        onPress: async () => {
+          setInvoicing(true);
+          try {
+            const res: any = await maintenanceApi.createInvoice(requestId);
+            const inv = res?.data?.invoice ?? res?.data?.invoices ?? res?.invoice;
+            setItem((prev: any) => ({ ...prev, invoiceId: inv?.id ?? true }));
+            if (inv?.id) navigation.navigate('InvoiceDetail', { invoiceId: inv.id });
+            else Alert.alert('Invoice created');
+          } catch (e: any) {
+            Alert.alert('Error', e?.message ?? 'Could not create the invoice.');
+          } finally {
+            setInvoicing(false);
+          }
+        },
+      },
+    ],
+  );
 
   const handleCancel = () => {
     Alert.alert('Cancel Request', 'Are you sure you want to cancel this request?', [
@@ -262,7 +297,7 @@ export default function RequestDetailScreen() {
           <Text style={s.headerTitle}>Request Detail</Text>
           <View style={{ width: 36 }} />
         </View>
-        <ActivityIndicator color="#A5B4FC" style={{ marginTop: 60 }} />
+        <ActivityIndicator color="#5EEAD4" style={{ marginTop: 60 }} />
       </SafeAreaView>
     );
   }
@@ -300,10 +335,10 @@ export default function RequestDetailScreen() {
               </TouchableOpacity>
             </View>
             {loadingEmps ? (
-              <ActivityIndicator color="#6366F1" style={{ marginVertical: 40 }} />
+              <ActivityIndicator color="#0F766E" style={{ marginVertical: 40 }} />
             ) : employees.length === 0 ? (
               <View style={s.emptyPicker}>
-                <Icon name="person-outline" size={32} color="#C7D2FE" />
+                <Icon name="person-outline" size={32} color="#99F6E4" />
                 <Text style={s.emptyPickerText}>No employees found</Text>
               </View>
             ) : (
@@ -319,7 +354,7 @@ export default function RequestDetailScreen() {
                     activeOpacity={0.7}
                   >
                     <View style={s.pickerAvatar}>
-                      <Icon name="person" size={16} color="#6366F1" />
+                      <Icon name="person" size={16} color="#0F766E" />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={s.pickerName}>{emp.username}</Text>
@@ -372,33 +407,17 @@ export default function RequestDetailScreen() {
 
               <View style={s.completeBody}>
                 {/* Cost row */}
-                <View style={s.completeField}>
-                  <Text style={s.completeLabel}>Cost (optional)</Text>
-                  <View style={[s.costWrapper, isCostFocused && s.costWrapperFocused]}>
-                    <Text style={s.costPrefix}>$</Text>
-                    <TextInput
-                      style={s.costInput}
-                      placeholder="0.00"
-                      placeholderTextColor="#C4C9D4"
-                      value={completeCost}
-                      onChangeText={setCompleteCost}
-                      keyboardType="numeric"
-                      returnKeyType="done"
-                      onFocus={() => setIsCostFocused(true)}
-                      onBlur={() => setIsCostFocused(false)}
-                      onSubmitEditing={() => Keyboard.dismiss()}
-                    />
-                    {completeCost.length > 0 && (
-                      <TouchableOpacity
-                        onPress={() => setCompleteCost('')}
-                        style={s.costClear}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      >
-                        <Icon name="close-circle" size={18} color="#C4C9D4" />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                </View>
+                <Input
+                  label="Cost (optional)"
+                  icon="cash-outline"
+                  prefix="$"
+                  placeholder="0.00"
+                  value={completeCost}
+                  onChangeText={setCompleteCost}
+                  keyboardType="decimal-pad"
+                  returnKeyType="done"
+                  onSubmitEditing={() => Keyboard.dismiss()}
+                />
 
                 {/* Billable toggle */}
                 <TouchableOpacity
@@ -411,7 +430,7 @@ export default function RequestDetailScreen() {
                       <Icon
                         name="receipt-outline"
                         size={14}
-                        color={completeIsBillable ? '#6366F1' : '#9CA3AF'}
+                        color={completeIsBillable ? '#0F766E' : '#9CA3AF'}
                       />
                     </View>
                     <View>
@@ -425,19 +444,14 @@ export default function RequestDetailScreen() {
                 </TouchableOpacity>
 
                 {/* Note / description */}
-                <View style={s.completeField}>
-                  <Text style={s.completeLabel}>Completion notes (optional)</Text>
-                  <TextInput
-                    style={s.noteInput}
-                    placeholder="Describe what was done, parts used, etc."
-                    placeholderTextColor="#9CA3AF"
-                    value={completeNote}
-                    onChangeText={setCompleteNote}
-                    multiline
-                    numberOfLines={4}
-                    textAlignVertical="top"
-                  />
-                </View>
+                <Input
+                  label="Completion notes (optional)"
+                  placeholder="Describe what was done, parts used, etc."
+                  value={completeNote}
+                  onChangeText={setCompleteNote}
+                  multiline
+                  maxLength={500}
+                />
 
                 {/* Confirm button — hidden while keyboard is open */}
                 {!keyboardVisible && (
@@ -495,7 +509,7 @@ export default function RequestDetailScreen() {
               ])
             }
           >
-            <Icon name="notifications-outline" size={18} color="#A5B4FC" />
+            <Icon name="notifications-outline" size={18} color="#5EEAD4" />
           </TouchableOpacity>
         </View>
 
@@ -508,8 +522,8 @@ export default function RequestDetailScreen() {
             </View>
           ) : (
             <View style={[s.chip, { backgroundColor: 'rgba(165,180,252,0.2)' }]}>
-              <Icon name={STEPS[curStep]?.icon ?? 'time-outline'} size={12} color="#A5B4FC" />
-              <Text style={[s.chipText, { color: '#A5B4FC' }]}>{STEPS[curStep]?.label ?? status}</Text>
+              <Icon name={STEPS[curStep]?.icon ?? 'time-outline'} size={12} color="#5EEAD4" />
+              <Text style={[s.chipText, { color: '#5EEAD4' }]}>{STEPS[curStep]?.label ?? status}</Text>
             </View>
           )}
           <View style={[s.chip, { backgroundColor: isUrgent ? 'rgba(220,38,38,0.2)' : 'rgba(255,255,255,0.12)' }]}>
@@ -633,6 +647,18 @@ export default function RequestDetailScreen() {
                 <Text style={s.completedBannerText}>Request completed</Text>
               </View>
             )}
+            {/* Billable + completed: bill it now instead of waiting for the next regular invoice */}
+            {status === 'completed' && item?.isBillable && Number(item?.cost) > 0 && !item?.invoiceId && can('create', 'invoice') ? (
+              <TouchableOpacity
+                style={s.invoiceNowBtn}
+                activeOpacity={0.8}
+                disabled={invoicing}
+                onPress={handleInvoiceNow}
+              >
+                {invoicing ? <ActivityIndicator size="small" color="#0F766E" /> : <Icon name="receipt-outline" size={16} color="#0F766E" />}
+                <Text style={s.invoiceNowText}>{'Invoice the tenant now · $' + Number(item.cost).toFixed(2)}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           {/* ── Details ── */}
@@ -640,8 +666,8 @@ export default function RequestDetailScreen() {
             <Text style={s.cardTitle}>Details</Text>
             <View style={s.detailGrid}>
               <View style={s.detailItem}>
-                <View style={[s.detailIcon, { backgroundColor: '#EEF2FF' }]}>
-                  <Icon name="home-outline" size={14} color="#6366F1" />
+                <View style={[s.detailIcon, { backgroundColor: '#F0FDFA' }]}>
+                  <Icon name="home-outline" size={14} color="#0F766E" />
                 </View>
                 <View>
                   <Text style={s.detailLabel}>Unit</Text>
@@ -727,7 +753,7 @@ export default function RequestDetailScreen() {
             {replies.length === 0 ? (
               <View style={s.emptyThread}>
                 <View style={s.emptyThreadIcon}>
-                  <Icon name="chatbubble-ellipses-outline" size={26} color="#C7D2FE" />
+                  <Icon name="chatbubble-ellipses-outline" size={26} color="#99F6E4" />
                 </View>
                 <Text style={s.emptyThreadText}>No messages yet</Text>
                 <Text style={s.emptyThreadSub}>Reply below to start the conversation.</Text>
@@ -783,7 +809,12 @@ export default function RequestDetailScreen() {
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F5F6FA' },
+  invoiceNowBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 10,
+    paddingVertical: 12, borderRadius: 12, backgroundColor: '#F0FDFA', borderWidth: 1, borderColor: '#CCFBF1',
+  },
+  invoiceNowText: { fontSize: 14, fontWeight: '700', color: '#0F766E' },
+  container: { flex: 1, backgroundColor: '#F4F6F8' },
   scroll: { flex: 1 },
   content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32, gap: 14 },
 
@@ -808,7 +839,7 @@ const s = StyleSheet.create({
     width: 140,
     height: 140,
     borderRadius: 70,
-    backgroundColor: 'rgba(99,102,241,0.2)',
+    backgroundColor: 'rgba(15,118,110,0.2)',
     bottom: -40,
     left: -40,
   },
@@ -879,7 +910,7 @@ const s = StyleSheet.create({
     elevation: 2,
     gap: 14,
   },
-  cardTitle: { fontSize: 14, fontWeight: '800', color: '#111827', letterSpacing: -0.2 },
+  cardTitle: { fontSize: 14, fontWeight: '800', color: '#0F172A', letterSpacing: -0.2 },
 
   // Stepper
   stepperRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4 },
@@ -956,7 +987,7 @@ const s = StyleSheet.create({
     flexShrink: 0,
   },
   detailLabel: { fontSize: 11, color: '#9CA3AF', fontWeight: '500', marginBottom: 2 },
-  detailValue: { fontSize: 13, fontWeight: '700', color: '#111827' },
+  detailValue: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
 
   // Messages
   emptyThread: { alignItems: 'center', paddingVertical: 24, gap: 6 },
@@ -964,7 +995,7 @@ const s = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 16,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#F0FDFA',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
@@ -986,7 +1017,7 @@ const s = StyleSheet.create({
     marginBottom: 4,
   },
   bubbleBody: { maxWidth: '75%', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
-  bubbleBodyOwner: { backgroundColor: '#6366F1', borderBottomRightRadius: 4 },
+  bubbleBodyOwner: { backgroundColor: '#0F766E', borderBottomRightRadius: 4 },
   bubbleBodyTenant: { backgroundColor: '#F3F4F6', borderBottomLeftRadius: 4 },
   bubbleText: { fontSize: 14, color: '#374151', lineHeight: 20 },
   bubbleTextOwner: { color: '#FFFFFF' },
@@ -1011,19 +1042,19 @@ const s = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     fontSize: 14,
-    color: '#111827',
+    color: '#0F172A',
     maxHeight: 100,
   },
   sendBtn: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: '#6366F1',
+    backgroundColor: '#0F766E',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
-  sendBtnDisabled: { backgroundColor: '#C7D2FE' },
+  sendBtnDisabled: { backgroundColor: '#99F6E4' },
 
   // Modal
   modalOverlay: {
@@ -1055,7 +1086,7 @@ const s = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#F3F4F6',
   },
-  modalTitle: { fontSize: 16, fontWeight: '800', color: '#111827' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
   modalClose: {
     width: 32,
     height: 32,
@@ -1075,11 +1106,11 @@ const s = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#F0FDFA',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pickerName: { fontSize: 14, fontWeight: '700', color: '#111827' },
+  pickerName: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
   pickerRole: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
   pickerSep: { height: StyleSheet.hairlineWidth, backgroundColor: '#F3F4F6', marginLeft: 74 },
   emptyPicker: { alignItems: 'center', paddingVertical: 40, gap: 10 },
@@ -1099,41 +1130,11 @@ const s = StyleSheet.create({
   completeBody: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 28, gap: 16 },
   completeField: { gap: 8 },
   completeLabel: { fontSize: 12, fontWeight: '700', color: '#374151', letterSpacing: 0.1 },
-  costWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
-    paddingHorizontal: 14,
-    paddingVertical: 4,
-  },
-  costWrapperFocused: {
-    borderColor: '#6366F1',
-    backgroundColor: '#FAFAFE',
-  },
-  costPrefix: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#6B7280',
-    marginRight: 6,
-  },
-  costInput: {
-    flex: 1,
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    paddingVertical: 12,
-  },
-  costClear: {
-    paddingLeft: 6,
-  },
   billableRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#F9FAFB',
+    backgroundColor: '#F8FAFC',
     borderRadius: 14,
     borderWidth: 1.5,
     borderColor: '#E5E7EB',
@@ -1149,8 +1150,8 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  billableIconActive: { backgroundColor: '#EEF2FF' },
-  billableTitle: { fontSize: 13, fontWeight: '700', color: '#111827' },
+  billableIconActive: { backgroundColor: '#F0FDFA' },
+  billableTitle: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
   billableSub:   { fontSize: 11, color: '#9CA3AF', marginTop: 1 },
   toggle: {
     width: 44,
@@ -1161,7 +1162,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     flexShrink: 0,
   },
-  toggleActive: { backgroundColor: '#6366F1' },
+  toggleActive: { backgroundColor: '#0F766E' },
   toggleThumb: {
     width: 20,
     height: 20,
@@ -1174,17 +1175,6 @@ const s = StyleSheet.create({
     elevation: 2,
   },
   toggleThumbActive: { alignSelf: 'flex-end' },
-  noteInput: {
-    backgroundColor: '#F9FAFB',
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: '#111827',
-    minHeight: 100,
-  },
   completeConfirmBtn: {
     flexDirection: 'row',
     alignItems: 'center',

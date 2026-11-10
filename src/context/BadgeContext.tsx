@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { maintenanceApi, notificationsApi } from '../services/api';
+import { maintenanceApi, notificationsApi, pickList } from '../services/api';
+import { useAuth } from './AuthContext';
 
 type BadgeContextType = {
   requestCount:     number;
@@ -25,7 +26,7 @@ export function BadgeProvider({ children }: { children: React.ReactNode }) {
       ]);
 
       if (maintenanceRes.status === 'fulfilled') {
-        const items: any[] = maintenanceRes.value?.data?.maintenances ?? [];
+        const items: any[] = pickList(maintenanceRes.value, 'maintenanceRequests', 'maintenances');
         const active = items.filter(
           (r: any) => r.status !== 'completed' && r.status !== 'cancelled',
         );
@@ -33,8 +34,8 @@ export function BadgeProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (notifRes.status === 'fulfilled') {
-        const items: any[] = notifRes.value?.data?.notifications ?? [];
-        const unread = items.filter((n: any) => !n.isRead);
+        const items: any[] = pickList(notifRes.value, 'notifications');
+        const unread = items.filter((n: any) => !n.readAt && !n.isRead);
         setNotificationCount(unread.length);
       }
     } catch {
@@ -42,9 +43,10 @@ export function BadgeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const { isAuthenticated, propertyId } = useAuth();
   useEffect(() => {
-    fetchBadges();
-  }, [fetchBadges]);
+    if (isAuthenticated) fetchBadges();
+  }, [fetchBadges, isAuthenticated, propertyId]);
 
   return (
     <BadgeContext.Provider
