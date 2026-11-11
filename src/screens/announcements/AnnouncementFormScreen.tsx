@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '../../components/Text';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -13,6 +13,7 @@ import {
 import { colors, font, radius, spacing } from '../../theme';
 import { errMsg, stripHtml, textToHtml } from '../../utils/format';
 import { ANNOUNCEMENT_TYPES, typeMeta } from './AnnouncementsScreen';
+import { toast } from '../../components/Toast';
 
 const AUDIENCES = [
   { label: 'Everyone', value: 'all' },
@@ -71,7 +72,7 @@ export default function AnnouncementFormScreen() {
   }, () => nav.goBack());
 
   const onDelete = () => confirmAction('Delete announcement', 'Delete this announcement for everyone?', async () => {
-    try { await announcementsApi.remove(announcement.id); nav.goBack(); } catch (e) { Alert.alert('Delete failed', errMsg(e)); }
+    try { await announcementsApi.remove(announcement.id); toast.deleted(); nav.goBack(); } catch (e) { toast.error(errMsg(e), { title: 'Delete failed' }); }
   });
 
   const meta = typeMeta(f.values.type);

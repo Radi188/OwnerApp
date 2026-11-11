@@ -3,7 +3,6 @@ import {
   View,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   Modal,
   KeyboardAvoidingView,
   Platform,
@@ -26,6 +25,8 @@ import { BackButton } from '../components/ui';
 const normNotifs = (res: any) => pickList(res, 'notifications').map((n: any) => ({ ...n, isRead: n.isRead ?? !!n.readAt }));
 const normAnns = (res: any) => pickList(res, 'announcements', 'data');
 import { useBadges } from '../context/BadgeContext';
+import { toast } from '../components/Toast';
+import { openNotificationTarget } from '../navigation/navigationRef';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Segment          = 'notifications' | 'announcements';
@@ -38,6 +39,8 @@ type TemplateGroup    = 'push' | 'announce';
 type NotifItem = {
   id: number; title: string; body: string; type?: string;
   isRead: boolean; createdAt: string;
+  /** e.g. { paymentId, invoiceId } for payment_pending */
+  data?: any;
 };
 type AnnouncementItem = {
   id: number; title: string; content: string;
@@ -53,7 +56,7 @@ type DetailItem =
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const CATEGORY_META: Record<NotifCategory, { icon: string; iconBg: string; iconColor: string; label: string }> = {
-  Announcement: { icon: 'megaphone',           iconBg: '#F0FDFA', iconColor: '#0F766E', label: 'Announcement' },
+  Announcement: { icon: 'megaphone',           iconBg: '#F1F0FD', iconColor: '#554ADF', label: 'Announcement' },
   Invoice:      { icon: 'receipt',             iconBg: '#DBEAFE', iconColor: '#2563EB', label: 'Invoice' },
   Maintenance:  { icon: 'construct',           iconBg: '#FEF9C3', iconColor: '#CA8A04', label: 'Maintenance' },
   General:      { icon: 'chatbubble-ellipses', iconBg: '#F0FDF4', iconColor: '#16A34A', label: 'General' },
@@ -77,8 +80,8 @@ const PUSH_TEMPLATES = [
   { id: 'maintenance_upd', icon: 'construct',         iconBg: '#FEF9C3', iconColor: '#CA8A04', label: 'Maintenance Update',  category: 'Maintenance'  as NotifCategory, title: 'Maintenance Request Update',          body: '{{greeting}}your maintenance request has been reviewed and is now being processed. Our team will contact you shortly.' },
 ];
 const ANNOUNCE_TEMPLATES = [
-  { id: 'water_cut',  icon: 'water',            iconBg: '#F0FDFA', iconColor: '#0F766E', label: 'Water Interruption',  category: 'Announcement' as NotifCategory, title: 'Temporary Water Supply Interruption', body: '{{greeting}}water supply will be temporarily interrupted for scheduled maintenance. We apologize for the inconvenience.' },
-  { id: 'inspection', icon: 'shield-checkmark', iconBg: '#F0FDFA', iconColor: '#0F766E', label: 'Building Inspection', category: 'Announcement' as NotifCategory, title: 'Building Inspection Notice',          body: '{{greeting}}a routine building inspection is scheduled. Please ensure your unit is accessible. Thank you.' },
+  { id: 'water_cut',  icon: 'water',            iconBg: '#F1F0FD', iconColor: '#554ADF', label: 'Water Interruption',  category: 'Announcement' as NotifCategory, title: 'Temporary Water Supply Interruption', body: '{{greeting}}water supply will be temporarily interrupted for scheduled maintenance. We apologize for the inconvenience.' },
+  { id: 'inspection', icon: 'shield-checkmark', iconBg: '#F1F0FD', iconColor: '#554ADF', label: 'Building Inspection', category: 'Announcement' as NotifCategory, title: 'Building Inspection Notice',          body: '{{greeting}}a routine building inspection is scheduled. Please ensure your unit is accessible. Thank you.' },
   { id: 'holiday',    icon: 'sunny',            iconBg: '#F0FDF4', iconColor: '#16A34A', label: 'Holiday Closure',     category: 'General'      as NotifCategory, title: 'Office Closure — Public Holiday',     body: '{{greeting}}our office will be closed during the upcoming public holiday. Normal operations resume on the next working day.' },
 ];
 
@@ -86,7 +89,7 @@ const ANNOUNCE_TEMPLATES = [
 function typeToCategory(type?: string): NotifCategory {
   if (!type) return 'General';
   const t = type.toLowerCase();
-  if (t.includes('invoice'))                            return 'Invoice';
+  if (t.includes('invoice') || t.includes('payment'))   return 'Invoice';
   if (t.includes('maintenance') || t.includes('repair')) return 'Maintenance';
   if (t.includes('announcement'))                       return 'Announcement';
   return 'General';
@@ -161,7 +164,7 @@ function AnnounceCard({ item, onPress }: { item: AnnouncementItem; onPress: (ite
     <TouchableOpacity style={ac.card} activeOpacity={0.75} onPress={() => onPress(item)}>
       <View style={ac.inner}>
         <View style={ac.iconWrap}>
-          <Icon name="megaphone" size={20} color="#0F766E" />
+          <Icon name="megaphone" size={20} color="#554ADF" />
         </View>
         <View style={ac.body}>
           <View style={ac.topRow}>
@@ -210,7 +213,7 @@ function DetailSheet({ item, visible, onClose }: { item: DetailItem | null; visi
     pillLabel = meta.label; pillBg = meta.iconBg; pillColor = meta.iconColor;
   } else {
     const aud = AUDIENCE_META[(item.data as AnnouncementItem).audience] ?? AUDIENCE_META.all;
-    icon = 'megaphone'; iconBg = '#F0FDFA'; iconColor = '#0F766E';
+    icon = 'megaphone'; iconBg = '#F1F0FD'; iconColor = '#554ADF';
     pillLabel = aud.label; pillBg = aud.bg; pillColor = aud.color; pillIcon = aud.icon;
   }
 
@@ -345,7 +348,7 @@ function ComposeSheet({
   const canSend = title.trim().length > 0 && body.trim().length > 0;
 
   const handleSend = async () => {
-    if (!canSend) { Alert.alert('Missing fields', 'Please fill in title and message.'); return; }
+    if (!canSend) { toast.warning('Please fill in title and message.', { title: 'Missing fields' }); return; }
     setSending(true);
     try {
       const calls: Promise<any>[] = [];
@@ -386,7 +389,7 @@ function ComposeSheet({
       }
       onClose();
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to send.');
+      toast.error(e?.message ?? 'Failed to send.');
     } finally {
       setSending(false);
     }
@@ -463,7 +466,7 @@ function ComposeSheet({
                     activeOpacity={0.8}
                   >
                     <View style={[cs.targetIconWrap, pushActive && cs.targetIconPushActive]}>
-                      <Icon name="notifications" size={16} color={pushActive ? '#fff' : '#0F766E'} />
+                      <Icon name="notifications" size={16} color={pushActive ? '#fff' : '#554ADF'} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[cs.targetTitle, pushActive && cs.targetTitleActive]}>Push Notification</Text>
@@ -521,7 +524,7 @@ function ComposeSheet({
                     <View style={cs.recipRow}>
                       {(['all', 'unit'] as const).map(r => (
                         <TouchableOpacity key={r} style={[cs.recipBtn, recipient === r && cs.recipBtnActive]} onPress={() => { setRecipient(r); if (r === 'all') setSelectedUnits([]); }} activeOpacity={0.8}>
-                          <Icon name={r === 'all' ? 'people-outline' : 'home-outline'} size={14} color={recipient === r ? '#0F766E' : '#9CA3AF'} />
+                          <Icon name={r === 'all' ? 'people-outline' : 'home-outline'} size={14} color={recipient === r ? '#554ADF' : '#9CA3AF'} />
                           <Text style={[cs.recipText, recipient === r && cs.recipTextActive]}>
                             {r === 'all' ? 'All Tenants' : selectedUnits.length > 0 ? `${selectedUnits.length} unit${selectedUnits.length > 1 ? 's' : ''}` : 'Specific Units'}
                           </Text>
@@ -538,7 +541,7 @@ function ComposeSheet({
                     <View style={cs.recipRow}>
                       {([['all', 'All', 'people-outline'], ['tenant', 'Tenants', 'home-outline'], ['employee', 'Staff', 'briefcase-outline']] as const).map(([key, label, icon]) => (
                         <TouchableOpacity key={key} style={[cs.recipBtn, { flex: key === 'employee' ? 1 : 1 }, audience === key && cs.recipBtnActive]} onPress={() => { setAudience(key); if (key !== 'tenant') setSelectedUnits([]); }} activeOpacity={0.8}>
-                          <Icon name={icon} size={14} color={audience === key ? '#0F766E' : '#9CA3AF'} />
+                          <Icon name={icon} size={14} color={audience === key ? '#554ADF' : '#9CA3AF'} />
                           <Text style={[cs.recipText, audience === key && cs.recipTextActive]}>{label}</Text>
                         </TouchableOpacity>
                       ))}
@@ -557,7 +560,7 @@ function ComposeSheet({
                             <View key={u.unitId} style={cs.chip}>
                               <Text style={cs.chipText}>Unit {u.unitCode}</Text>
                               <TouchableOpacity onPress={() => toggleUnit(u)} activeOpacity={0.7} hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}>
-                                <Icon name="close-circle" size={14} color="#0F766E" />
+                                <Icon name="close-circle" size={14} color="#554ADF" />
                               </TouchableOpacity>
                             </View>
                           ))}
@@ -580,7 +583,7 @@ function ComposeSheet({
                     {!unitsLoading && units.length > 0 && (
                       <View style={cs.selectAllRow}>
                         <TouchableOpacity onPress={() => setSelectedUnits(selectedUnits.length === units.length ? [] : [...units])} activeOpacity={0.7} style={cs.selectAllBtn}>
-                          <Icon name={selectedUnits.length === units.length ? 'checkbox' : 'square-outline'} size={16} color="#0F766E" />
+                          <Icon name={selectedUnits.length === units.length ? 'checkbox' : 'square-outline'} size={16} color="#554ADF" />
                           <Text style={cs.selectAllText}>{selectedUnits.length === units.length ? 'Deselect All' : `Select All (${units.length})`}</Text>
                         </TouchableOpacity>
                       </View>
@@ -591,7 +594,7 @@ function ComposeSheet({
 
                     {/* Unit rows */}
                     {unitsLoading ? (
-                      <ActivityIndicator color="#0F766E" style={{ marginVertical: 16 }} />
+                      <ActivityIndicator color="#554ADF" style={{ marginVertical: 16 }} />
                     ) : (
                       <View style={cs.unitList}>
                         {filteredUnits.map((u, i) => {
@@ -600,7 +603,7 @@ function ComposeSheet({
                             <View key={u.contractId}>
                               <TouchableOpacity style={[cs.unitRow, isSel && cs.unitRowSel]} onPress={() => toggleUnit(u)} activeOpacity={0.75}>
                                 <View style={[cs.unitCheckbox, isSel && cs.unitCheckboxSel]}>{isSel && <Icon name="checkmark" size={12} color="#fff" />}</View>
-                                <View style={[cs.unitAvatar, isSel && cs.unitAvatarSel]}><Icon name="home" size={13} color={isSel ? '#fff' : '#0F766E'} /></View>
+                                <View style={[cs.unitAvatar, isSel && cs.unitAvatarSel]}><Icon name="home" size={13} color={isSel ? '#fff' : '#554ADF'} /></View>
                                 <View style={cs.unitInfo}>
                                   <Text style={[cs.unitCode, isSel && cs.unitCodeSel]}>Unit {u.unitCode}{u.floorNumber ? ` · F${u.floorNumber}` : ''}</Text>
                                   <Text style={cs.unitTenant} numberOfLines={1}>{u.tenantName}</Text>
@@ -619,8 +622,8 @@ function ComposeSheet({
                 <View style={cs.tplSection}>
                   {/* Push alert templates */}
                   <View style={cs.tplGroupHeader}>
-                    <View style={[cs.tplGroupIcon, { backgroundColor: '#F0FDFA' }]}>
-                      <Icon name="notifications" size={13} color="#0F766E" />
+                    <View style={[cs.tplGroupIcon, { backgroundColor: '#F1F0FD' }]}>
+                      <Icon name="notifications" size={13} color="#554ADF" />
                     </View>
                     <Text style={cs.tplGroupLabel}>Push Alert Templates</Text>
                   </View>
@@ -722,7 +725,9 @@ export default function NotificationsScreen() {
   const handleOpenNotif = (id: number) => {
     const item = notifications.find(n => n.id === id);
     if (!item) return;
-    setDetail({ kind: 'notif', data: item });
+    // Payment notifications open the payment (verify / reject) instead of the text view
+    const opened = openNotificationTarget(item.type, item.data);
+    if (!opened) setDetail({ kind: 'notif', data: item });
     if (!item.isRead) {
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
       notificationsApi.markRead(id).then(refreshBadges).catch(() => {/* silent */});
@@ -809,7 +814,7 @@ export default function NotificationsScreen() {
               <Icon
                 name={seg === 'notifications' ? 'notifications-outline' : 'megaphone-outline'}
                 size={14}
-                color={segment === seg ? '#0F766E' : '#9CA3AF'}
+                color={segment === seg ? '#554ADF' : '#9CA3AF'}
               />
               <Text style={[s.segText, segment === seg && s.segTextActive]}>
                 {seg === 'notifications' ? 'Notifications' : 'Announcements'}
@@ -834,7 +839,7 @@ export default function NotificationsScreen() {
               <Text style={s.unreadBadgeText}>{unreadCount} unread</Text>
             </View>
             <TouchableOpacity onPress={handleMarkAllRead} style={s.markAllBtn} activeOpacity={0.7}>
-              <Icon name="checkmark-done-outline" size={13} color="#0F766E" />
+              <Icon name="checkmark-done-outline" size={13} color="#554ADF" />
               <Text style={s.markAllText}>Mark all as read</Text>
             </TouchableOpacity>
           </View>
@@ -869,7 +874,7 @@ export default function NotificationsScreen() {
 
       {/* ── List ── */}
       {loading ? (
-        <ActivityIndicator color="#0F766E" style={{ marginTop: 48 }} />
+        <ActivityIndicator color="#554ADF" style={{ marginTop: 48 }} />
       ) : (
         <FlatList
           data={segment === 'notifications' ? notifListData : annListData}
@@ -877,7 +882,7 @@ export default function NotificationsScreen() {
           style={s.list}
           contentContainerStyle={s.listContent}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#0F766E']} tintColor="#0F766E" />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#554ADF']} tintColor="#554ADF" />}
           renderItem={({ item }) => {
             if (item.kind === 'header') return <SectionLabel label={item.label} />;
             if (item.kind === 'notif')  return <NotifCard item={item.data as NotifItem} onPress={handleOpenNotif} />;
@@ -886,7 +891,7 @@ export default function NotificationsScreen() {
           ListEmptyComponent={
             <View style={s.emptyWrap}>
               <View style={s.emptyIconWrap}>
-                <Icon name={segment === 'notifications' ? 'notifications-off-outline' : 'megaphone-outline'} size={40} color="#99F6E4" />
+                <Icon name={segment === 'notifications' ? 'notifications-off-outline' : 'megaphone-outline'} size={40} color="#BBB6F5" />
               </View>
               <Text style={s.emptyTitle}>No {segment === 'notifications' ? 'notifications' : 'announcements'}</Text>
               <Text style={s.emptySubtitle}>
@@ -930,44 +935,44 @@ const s = StyleSheet.create({
   headerTitle:      { fontSize: 22, fontWeight: '800', color: '#0F172A', letterSpacing: -0.5 },
   headerSub:        { fontSize: 12, color: '#9CA3AF', fontWeight: '500', marginTop: 2 },
   headerMeta:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  unreadBadge:      { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F0FDFA', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
-  unreadDot:        { width: 7, height: 7, borderRadius: 4, backgroundColor: '#0F766E' },
-  unreadBadgeText:  { fontSize: 12, fontWeight: '700', color: '#0F766E' },
+  unreadBadge:      { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#F1F0FD', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
+  unreadDot:        { width: 7, height: 7, borderRadius: 4, backgroundColor: '#554ADF' },
+  unreadBadgeText:  { fontSize: 12, fontWeight: '700', color: '#554ADF' },
   markAllBtn:       { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  markAllText:      { fontSize: 12, fontWeight: '600', color: '#0F766E' },
-  composeBtn:       { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#0F766E', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 9 },
+  markAllText:      { fontSize: 12, fontWeight: '600', color: '#554ADF' },
+  composeBtn:       { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#554ADF', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 9 },
   composeBtnText:   { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
 
   segmentRow:         { flexDirection: 'row', gap: 8 },
   segBtn:             { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 9, borderRadius: 12, backgroundColor: '#F3F4F6', borderWidth: 1.5, borderColor: 'transparent' },
-  segBtnActive:       { backgroundColor: '#F0FDFA', borderColor: '#99F6E4' },
+  segBtnActive:       { backgroundColor: '#F1F0FD', borderColor: '#BBB6F5' },
   segText:            { fontSize: 13, fontWeight: '600', color: '#9CA3AF' },
-  segTextActive:      { color: '#0F766E', fontWeight: '700' },
+  segTextActive:      { color: '#554ADF', fontWeight: '700' },
   segBadge:           { backgroundColor: '#DC2626', borderRadius: 8, paddingHorizontal: 5, paddingVertical: 2, minWidth: 18, alignItems: 'center' },
-  segBadgeIndigo:     { backgroundColor: '#F0FDFA' },
+  segBadgeIndigo:     { backgroundColor: '#F1F0FD' },
   segBadgeText:       { fontSize: 10, fontWeight: '700', color: '#fff' },
-  segBadgeTextIndigo: { color: '#0F766E' },
+  segBadgeTextIndigo: { color: '#554ADF' },
 
   tabsBar:     { backgroundColor: '#FFFFFF', maxHeight: 52, flexGrow: 0 },
   tabsContent: { paddingBottom: 12, paddingHorizontal: 16, gap: 8 },
   tab:         { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 13, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: 'transparent' },
-  tabActive:   { backgroundColor: '#F0FDFA', borderColor: '#0F766E' },
+  tabActive:   { backgroundColor: '#F1F0FD', borderColor: '#554ADF' },
   tabText:     { fontSize: 12, fontWeight: '600', color: '#6B7280' },
-  tabTextActive: { color: '#0F766E' },
+  tabTextActive: { color: '#554ADF' },
 
   list:        { flex: 1 },
   listContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
 
   emptyWrap:    { alignItems: 'center', paddingTop: 64, gap: 10 },
-  emptyIconWrap:{ width: 80, height: 80, borderRadius: 24, backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  emptyIconWrap:{ width: 80, height: 80, borderRadius: 24, backgroundColor: '#F1F0FD', alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
   emptyTitle:   { fontSize: 16, fontWeight: '800', color: '#374151' },
   emptySubtitle:{ fontSize: 13, color: '#9CA3AF' },
 });
 
 const nc = StyleSheet.create({
   card:        { backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden', flexDirection: 'row', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, marginBottom: 10 },
-  cardUnread:  { shadowColor: '#0F766E', shadowOpacity: 0.08 },
-  accentBar:   { width: 4, backgroundColor: '#0F766E' },
+  cardUnread:  { shadowColor: '#554ADF', shadowOpacity: 0.08 },
+  accentBar:   { width: 4, backgroundColor: '#554ADF' },
   inner:       { flex: 1, flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 14, gap: 12 },
   iconWrap:    { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   body:        { flex: 1 },
@@ -978,13 +983,13 @@ const nc = StyleSheet.create({
   title:       { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 3, lineHeight: 20 },
   titleUnread: { fontWeight: '800', color: '#0F172A' },
   msg:         { fontSize: 12, color: '#6B7280', lineHeight: 18 },
-  dot:         { width: 8, height: 8, borderRadius: 4, backgroundColor: '#0F766E', flexShrink: 0, marginTop: 6 },
+  dot:         { width: 8, height: 8, borderRadius: 4, backgroundColor: '#554ADF', flexShrink: 0, marginTop: 6 },
 });
 
 const ac = StyleSheet.create({
   card:    { backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 2, marginBottom: 10 },
   inner:   { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 14, gap: 12 },
-  iconWrap:{ width: 46, height: 46, borderRadius: 14, backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  iconWrap:{ width: 46, height: 46, borderRadius: 14, backgroundColor: '#F1F0FD', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   body:    { flex: 1 },
   topRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 },
   pill:    { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 7, paddingHorizontal: 8, paddingVertical: 3 },
@@ -1026,8 +1031,8 @@ const cs = StyleSheet.create({
   header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
   closeBtn:    { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: 17, fontWeight: '700', color: '#0F172A' },
-  sendBtn:     { backgroundColor: '#0F766E', borderRadius: 20, paddingHorizontal: 20, paddingVertical: 8, minWidth: 64, alignItems: 'center' },
-  sendBtnOff:  { backgroundColor: '#5EEAD4' },
+  sendBtn:     { backgroundColor: '#554ADF', borderRadius: 20, paddingHorizontal: 20, paddingVertical: 8, minWidth: 64, alignItems: 'center' },
+  sendBtnOff:  { backgroundColor: '#A49DF2' },
   sendBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 
   form:      { paddingBottom: 24 },
@@ -1036,17 +1041,17 @@ const cs = StyleSheet.create({
   // Publish targets
   targetRow:          { gap: 10 },
   targetBtn:          { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16, borderWidth: 1.5, borderColor: '#E5E7EB', backgroundColor: '#FAFAFA' },
-  targetBtnPushActive:{ borderColor: '#99F6E4', backgroundColor: '#F0FDFA' },
+  targetBtnPushActive:{ borderColor: '#BBB6F5', backgroundColor: '#F1F0FD' },
   targetBtnAnnActive: { borderColor: '#DDD6FE', backgroundColor: '#F5F3FF' },
-  targetIconWrap:     { width: 38, height: 38, borderRadius: 11, backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  targetIconPushActive: { backgroundColor: '#0F766E' },
+  targetIconWrap:     { width: 38, height: 38, borderRadius: 11, backgroundColor: '#F1F0FD', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  targetIconPushActive: { backgroundColor: '#554ADF' },
   targetIconAnnActive:  { backgroundColor: '#7C3AED' },
   targetTitle:        { fontSize: 14, fontWeight: '700', color: '#374151' },
-  targetTitleActive:  { color: '#115E59' },
+  targetTitleActive:  { color: '#4339C4' },
   targetTitleAnnActive: { color: '#5B21B6' },
   targetSub:          { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
   targetCheck:        { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center', flexShrink: 0, backgroundColor: '#FFFFFF' },
-  targetCheckActive:  { backgroundColor: '#0F766E', borderColor: '#0F766E' },
+  targetCheckActive:  { backgroundColor: '#554ADF', borderColor: '#554ADF' },
   targetCheckAnnActive: { backgroundColor: '#7C3AED', borderColor: '#7C3AED' },
 
   bothHint:     { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: '#F5F3FF', borderRadius: 10, padding: 10, marginTop: 10 },
@@ -1060,34 +1065,34 @@ const cs = StyleSheet.create({
   // Recipients
   recipRow:       { flexDirection: 'row', gap: 8 },
   recipBtn:       { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 11, borderRadius: 12, borderWidth: 1.5, borderColor: '#E5E7EB', backgroundColor: '#FFFFFF' },
-  recipBtnActive: { borderColor: '#0F766E', backgroundColor: '#F0FDFA' },
+  recipBtnActive: { borderColor: '#554ADF', backgroundColor: '#F1F0FD' },
   recipText:      { fontSize: 12, fontWeight: '600', color: '#9CA3AF' },
-  recipTextActive:{ color: '#0F766E', fontWeight: '700' },
+  recipTextActive:{ color: '#554ADF', fontWeight: '700' },
 
   // Unit picker
   unitPickerWrap:  { marginTop: 12, borderRadius: 16, borderWidth: 1.5, borderColor: '#E5E7EB', overflow: 'hidden', backgroundColor: '#FAFAFA' },
-  selectedChipsWrap: { backgroundColor: '#F0FDFA', borderBottomWidth: 1, borderBottomColor: '#CCFBF1', paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8, gap: 8 },
+  selectedChipsWrap: { backgroundColor: '#F1F0FD', borderBottomWidth: 1, borderBottomColor: '#DEDBFA', paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8, gap: 8 },
   selectedChipsRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  chip:            { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#99F6E4', paddingHorizontal: 10, paddingVertical: 5 },
-  chipText:        { fontSize: 12, fontWeight: '600', color: '#115E59' },
+  chip:            { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#BBB6F5', paddingHorizontal: 10, paddingVertical: 5 },
+  chipText:        { fontSize: 12, fontWeight: '600', color: '#4339C4' },
   chipsFooter:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  chipsCount:      { fontSize: 11, color: '#0F766E', fontWeight: '600' },
+  chipsCount:      { fontSize: 11, color: '#554ADF', fontWeight: '600' },
   chipsClear:      { fontSize: 11, color: '#9CA3AF', fontWeight: '600' },
   unitHint:        { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
   unitHintText:    { fontSize: 12, color: '#9CA3AF' },
   selectAllRow:    { paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#F8FAFC', borderBottomWidth: 1, borderBottomColor: '#F3F4F6' },
   selectAllBtn:    { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  selectAllText:   { fontSize: 13, fontWeight: '600', color: '#0F766E' },
+  selectAllText:   { fontSize: 13, fontWeight: '600', color: '#554ADF' },
   unitList:        { maxHeight: 200 },
   unitRow:         { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: '#fff' },
   unitRowSel:      { backgroundColor: '#F5F3FF' },
   unitCheckbox:    { width: 20, height: 20, borderRadius: 6, borderWidth: 1.5, borderColor: '#D1D5DB', alignItems: 'center', justifyContent: 'center', flexShrink: 0, backgroundColor: '#fff' },
-  unitCheckboxSel: { backgroundColor: '#0F766E', borderColor: '#0F766E' },
-  unitAvatar:      { width: 32, height: 32, borderRadius: 9, backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  unitAvatarSel:   { backgroundColor: '#0F766E' },
+  unitCheckboxSel: { backgroundColor: '#554ADF', borderColor: '#554ADF' },
+  unitAvatar:      { width: 32, height: 32, borderRadius: 9, backgroundColor: '#F1F0FD', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  unitAvatarSel:   { backgroundColor: '#554ADF' },
   unitInfo:        { flex: 1 },
   unitCode:        { fontSize: 13, fontWeight: '700', color: '#0F172A' },
-  unitCodeSel:     { color: '#115E59' },
+  unitCodeSel:     { color: '#4339C4' },
   unitTenant:      { fontSize: 11, color: '#9CA3AF', marginTop: 1 },
   unitDivider:     { height: StyleSheet.hairlineWidth, backgroundColor: '#F3F4F6', marginHorizontal: 14 },
 
@@ -1103,7 +1108,7 @@ const cs = StyleSheet.create({
   tplIcon:        { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   tplBody:        { flex: 1 },
   tplLabel:       { fontSize: 13, fontWeight: '700', color: '#0F172A', marginBottom: 4 },
-  tplLabelActive: { color: '#115E59' },
+  tplLabelActive: { color: '#4339C4' },
   tplCatPill:     { alignSelf: 'flex-start', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
   tplCatText:     { fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
 

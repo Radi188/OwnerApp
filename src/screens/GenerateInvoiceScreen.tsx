@@ -13,6 +13,7 @@ import Segments from '../components/Segments';
 import { dayLabel } from '../i18n';
 import { colors, radius, spacing, toneColors } from '../theme';
 import { daysUntil, initials } from '../utils/format';
+import { toast } from '../components/Toast';
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 const fmtKhr = (n: number) => `${Math.round(n).toLocaleString('en-US')} ៛`;
@@ -133,18 +134,19 @@ export default function GenerateInvoiceScreen() {
               await invoicesApi.create({ contractId, billingMonth: billingMonthApi });
               persistLocal();
               setIsEditing(false);
-              Alert.alert(
-                t('invoiceForm.createdTitle'),
-                t('invoiceForm.createdMsg', { name: tenantName, date: dayLabel(dueDate, true) }),
-                [{ text: t('common.done'), onPress: () => nav.goBack() }],
-              );
+              toast.success(t('invoiceForm.createdMsg', { name: tenantName, date: dayLabel(dueDate, true) }), {
+                title: t('invoiceForm.createdTitle'),
+                duration: 4000,
+              });
+              nav.goBack();
             } catch (e: any) {
               if (e?.message?.toLowerCase().includes('duplicate') || e?.status === 400) {
                 persistLocal();
                 setIsEditing(false);
-                Alert.alert(t('invoiceForm.savedTitle'), t('invoiceForm.savedMsg'), [{ text: t('common.done'), onPress: () => nav.goBack() }]);
+                toast.success(t('invoiceForm.savedMsg'), { title: t('invoiceForm.savedTitle'), duration: 4000 });
+                nav.goBack();
               } else {
-                Alert.alert(t('common.error'), e?.message ?? t('invoiceForm.saveFailed'));
+                toast.error(e?.message ?? t('invoiceForm.saveFailed'));
               }
             } finally {
               setSubmitting(false);

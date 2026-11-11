@@ -1,19 +1,23 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Modal, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import { Text } from '../../components/Text';
 import { useNavigation } from '@react-navigation/native';
-import { chargesApi, num, pickList, pickOne, propertiesApi } from '../../services/api';
+import { chargesApi, fileUrl, num, pickList, pickOne, propertiesApi, type UploadFile } from '../../services/api';
 import type { PropertyCharge } from '../../services/types';
 import { Sheet } from '../../components/Sheet';
-import { Input } from '../../components/form';
+import { Input, chooseImage } from '../../components/form';
+import PropertyLogo from '../../components/PropertyLogo';
+import { TelegramJoinCard } from '../../components/TelegramLink';
 import { useAuth } from '../../context/AuthContext';
 import { useApi } from '../../hooks/useApi';
 import { numeric, required, useForm } from '../../hooks/useForm';
 import { Button, Card, ErrorView, Header, LoadingView, Screen, SelectField, SwitchRow, TextField } from '../../components/ui';
 import { colors, font, radius, spacing } from '../../theme';
 import { errMsg, money } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 const TYPES = ['Apartment', 'Room Rental', 'Shop House', 'Villa', 'Land'].map(v => ({ label: v, value: v }));
 const STATUSES = ['Active', 'Maintenance'].map(v => ({ label: v, value: v }));
@@ -26,13 +30,24 @@ const EMPTY = {
   // Tenancy defaults for move-in / move-out (booleans kept as 'true' / 'false' strings; multipart accepts both)
   defaultBillingStrategy: 'anniversary', defaultMoveOutRentMode: 'prorated', dailyRateBasis: 'actual',
   autoApplyDeposit: 'false', refundUnusedDays: 'false',
+  // One rule per line, printed as bullets at the bottom of every invoice (FRONTEND_UPDATE §4)
+  invoiceNotes: '',
 };
+
+const PRICE_KEYS = ['electricityPricePerKwh', 'waterPricePerM3'];
+/** Prices keep up to 4 decimals (e.g. 0.625) — never rounded to 2. */
+const price4 = (label: string) => (v: any) =>
+  numeric(label)(v) ?? (v !== '' && !/^\d+(\.\d{1,4})?$/.test(String(v).trim()) ? `${label}: up to 4 decimals` : null);
 
 export default function PropertySettingsScreen() {
   const { t } = useTranslation();
   const nav = useNavigation<any>();
   const { propertyId, can, switchProperty } = useAuth();
   const canEdit = can('edit', 'property');
+  // Newly picked images, uploaded with Save (multipart `logo` / `paymentQrCode`)
+  const [logoFile, setLogoFile] = useState<UploadFile | null>(null);
+  const [qrFile, setQrFile] = useState<UploadFile | null>(null);
+  const [qrOpen, setQrOpen] = useState(false);
 
   const { data, loading, error, refresh } = useApi(
     async () => (propertyId ? pickOne<any>(await propertiesApi.get(propertyId), 'properties', 'property') : null),
@@ -44,8 +59,9 @@ export default function PropertySettingsScreen() {
     name: required('Name'),
     numberOfFloors: numeric('Floors'),
     totalUnits: numeric('Total units'),
-    electricityPricePerKwh: numeric('Electricity price'),
-    waterPricePerM3: numeric('Water price'),
+    electricityPricePerKwh: price4('Electricity price'),
+    waterPricePerM3: price4('Water price'),
+    invoiceNotes: v => (String(v ?? '').length > 2000 ? 'Invoice notes: at most 2000 characters' : null),
     exchangeRate: numeric('Exchange rate'),
     billingDay: numeric('Billing day'),
     dueDay: numeric('Due day'),
@@ -57,7 +73,8 @@ export default function PropertySettingsScreen() {
     const next: any = {};
     (Object.keys(EMPTY) as (keyof typeof EMPTY)[]).forEach(k => {
       const v = data[k];
-      next[k] = v == null || v === 'null' ? EMPTY[k] : s(v);
+      // "0.3000" → "0.3": show the price without padding zeros (still up to 4 decimals)
+      next[k] = v == null || v === 'null' ? EMPTY[k] : PRICE_KEYS.includes(k) ? String(Number(v)) : s(v);
     });
     f.setValues(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -65,10 +82,10 @@ export default function PropertySettingsScreen() {
 
   const save = f.submit(async v => {
     if (!propertyId) throw new Error('No property selected');
-    await propertiesApi.update(propertyId, v);
+    await propertiesApi.update(propertyId, { ...v, logo: logoFile ?? undefined, paymentQrCode: qrFile ?? undefined });
     // Keep the header name in sync if it was renamed
     if (data?.name !== v.name) await switchProperty(propertyId, v.name).catch(() => {});
-  }, () => { Alert.alert('Saved', 'Property settings updated.'); nav.goBack(); });
+  }, () => nav.goBack(), { success: 'Property settings updated' });
 
   const fld = (key: keyof typeof EMPTY, label: string, extra: any = {}) => (
     <TextField label={label} editable={canEdit} {...f.field(key)} {...extra} />
@@ -81,7 +98,29 @@ export default function PropertySettingsScreen() {
     >
       {loading ? <LoadingView /> : error || !data ? <ErrorView message={error ?? 'Select a property first'} onRetry={refresh} /> : (
         <>
-          <Card>
+          {/* Property identity: logo, name, type · address */}
+          <Card style={styles.brand}>
+            <PropertyLogo logo={data.logo} uri={logoFile?.uri} name={f.values.name || data.name} size={76} />
+            <View style={styles.brandBody}>
+              <Text style={styles.brandName} numberOfLines={2}>{f.values.name || data.name}</Text>
+              <Text style={styles.brandMeta} numberOfLines={2}>
+                {[f.values.type, f.values.address].filter(Boolean).join(' · ') || '—'}
+              </Text>
+              {canEdit ? (
+                <Pressable
+                  onPress={async () => { const file = await chooseImage('Property logo'); if (file) setLogoFile(file); }}
+                  style={({ pressed }) => [styles.linkBtn, pressed && { opacity: 0.6 }]}
+                  hitSlop={6}
+                >
+                  <Icon name="image-outline" size={15} color={colors.primary} />
+                  <Text style={styles.linkText}>{data.logo || logoFile ? 'Change logo' : 'Add logo'}</Text>
+                  {logoFile ? <Text style={styles.newTag}>New</Text> : null}
+                </Pressable>
+              ) : null}
+            </View>
+          </Card>
+
+          <Card style={styles.gap}>
             <Text style={styles.section}>General</Text>
             {fld('name', 'Property name', { required: true })}
             <SelectField label="Type" icon="business-outline" value={f.values.type} options={TYPES} onChange={v => f.set('type', v)} disabled={!canEdit} />
@@ -119,6 +158,19 @@ export default function PropertySettingsScreen() {
             {/* Anniversary tenants get the same grace period unified tenants get between billingDay and dueDay */}
             {num(f.values.dueDay) > num(f.values.billingDay) ? (
               <Text style={styles.hint}>{t('propertySettings.graceHint', { count: num(f.values.dueDay) - num(f.values.billingDay) })}</Text>
+            ) : null}
+          </Card>
+
+          <Card style={styles.gap}>
+            <Text style={styles.section}>{t('propertySettings.invoiceNotes')}</Text>
+            <Text style={[styles.hint, { marginTop: -6, marginBottom: 12 }]}>{t('propertySettings.invoiceNotesHint')}</Text>
+            {fld('invoiceNotes', t('propertySettings.invoiceNotesLabel'), { multiline: true, maxLength: 2000, numberOfLines: 5, placeholder: t('propertySettings.invoiceNotesPlaceholder') })}
+            {f.values.invoiceNotes ? (
+              <View style={styles.notesPreview}>
+                {String(f.values.invoiceNotes).split('\n').filter(l => l.trim()).map((l, i) => (
+                  <Text key={i} style={styles.notesLine}>•  {l.trim()}</Text>
+                ))}
+              </View>
             ) : null}
           </Card>
 
@@ -164,15 +216,92 @@ export default function PropertySettingsScreen() {
           {propertyId ? <ChargesCard propertyId={propertyId} canEdit={canEdit} /> : null}
 
           <Card style={styles.gap}>
-            <Text style={styles.section}>Bank account</Text>
-            {fld('bankName', 'Bank name')}
-            {fld('bankAccountName', 'Account name')}
-            {fld('bankAccountNumber', 'Account number', { keyboardType: 'number-pad' })}
-            <Text style={font.caption}>Logo and payment QR code can be uploaded from the web dashboard.</Text>
+            <Text style={styles.section}>Payment info</Text>
+            <Text style={[styles.hint, { marginTop: -6, marginBottom: 12 }]}>
+              Shown to tenants on invoices and in the tenant app so they can pay by bank transfer or KHQR.
+            </Text>
+
+            {/* What tenants see: QR + bank details */}
+            <View style={styles.payCard}>
+              {qrFile?.uri || data.paymentQrCode ? (
+                <Pressable onPress={() => setQrOpen(true)} style={styles.qrFrame} accessibilityLabel="Payment QR code, tap to enlarge">
+                  <Image source={{ uri: qrFile?.uri ?? fileUrl(data.paymentQrCode) }} style={styles.qr} resizeMode="contain" />
+                  <View style={styles.qrZoom}><Icon name="expand-outline" size={14} color={colors.white} /></View>
+                </Pressable>
+              ) : (
+                <View style={[styles.qrFrame, styles.qrEmpty]}>
+                  <Icon name="qr-code-outline" size={40} color={colors.muted} />
+                  <Text style={styles.qrEmptyText}>No payment QR yet</Text>
+                </View>
+              )}
+              <View style={styles.bankLines}>
+                <BankLine icon="business-outline" label="Bank" value={f.values.bankName} />
+                <BankLine icon="person-outline" label="Account name" value={f.values.bankAccountName} />
+                <BankLine icon="card-outline" label="Account number" value={f.values.bankAccountNumber} mono />
+              </View>
+              {canEdit ? (
+                <Button
+                  title={data.paymentQrCode || qrFile ? 'Replace QR code' : 'Upload QR code'}
+                  icon="qr-code-outline"
+                  variant="secondary"
+                  small
+                  onPress={async () => { const file = await chooseImage('Payment QR code'); if (file) setQrFile(file); }}
+                  style={{ marginTop: spacing.md, alignSelf: 'stretch' }}
+                />
+              ) : null}
+              {qrFile ? <Text style={[styles.hint, { textAlign: 'center' }]}>New QR code — tap Save settings to upload it.</Text> : null}
+            </View>
+
+            {canEdit ? (
+              <View style={{ marginTop: spacing.lg }}>
+                {fld('bankName', 'Bank name')}
+                {fld('bankAccountName', 'Account name')}
+                {fld('bankAccountNumber', 'Account number', { keyboardType: 'number-pad' })}
+              </View>
+            ) : null}
           </Card>
+
+          <TelegramJoinCard propertyName={data.name} style={styles.gap} />
+
+          <QrViewer visible={qrOpen} uri={qrFile?.uri ?? fileUrl(data.paymentQrCode)} title={f.values.bankName || data.name} onClose={() => setQrOpen(false)} />
         </>
       )}
     </Screen>
+  );
+}
+
+function BankLine({ icon, label, value, mono }: { icon: string; label: string; value?: string; mono?: boolean }) {
+  return (
+    <View style={styles.bankLine}>
+      <Icon name={icon} size={15} color={colors.muted} />
+      <Text style={styles.bankLabel}>{label}</Text>
+      <Text style={[styles.bankValue, mono && styles.mono, !value && { color: colors.muted }]} numberOfLines={1} selectable>
+        {value || 'Not set'}
+      </Text>
+    </View>
+  );
+}
+
+/** Full-screen payment QR, e.g. to let a tenant scan it from the phone. */
+function QrViewer({ visible, uri, title, onClose }: { visible: boolean; uri?: string; title?: string; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+      <Pressable style={styles.viewer} onPress={onClose}>
+        <View style={[styles.viewerTop, { top: insets.top + 12 }]}>
+          <Text style={styles.viewerTitle} numberOfLines={1}>{title}</Text>
+          <TouchableOpacity onPress={onClose} style={styles.viewerClose} hitSlop={10} accessibilityLabel="Close">
+            <Icon name="close" size={20} color={colors.white} />
+          </TouchableOpacity>
+        </View>
+        {uri ? (
+          <View style={styles.viewerCard}>
+            <Image source={{ uri }} style={styles.viewerImage} resizeMode="contain" />
+          </View>
+        ) : null}
+        <Text style={styles.viewerHint}>Tap anywhere to close</Text>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -193,7 +322,7 @@ function ChargesCard({ propertyId, canEdit }: { propertyId: number; canEdit: boo
   };
 
   const run = async (fn: () => Promise<unknown>) => {
-    try { await fn(); await charges.reload(); } catch (e) { Alert.alert(t('common.error'), errMsg(e)); }
+    try { await fn(); await charges.reload(); } catch (e) { toast.error(errMsg(e)); }
   };
 
   const save = async () => {
@@ -279,6 +408,54 @@ function SwitchToggle({ value, onChange, disabled }: { value: boolean; onChange:
 
 const styles = StyleSheet.create({
   section: { ...font.h3, marginBottom: spacing.md },
+  notesPreview: { backgroundColor: colors.surfaceAlt, borderRadius: radius.md, padding: spacing.md, gap: 4 },
+  notesLine: { fontSize: 13, color: colors.text, lineHeight: 19 },
+
+  // Identity
+  brand: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
+  brandBody: { flex: 1, minWidth: 0 },
+  brandName: { fontSize: 19, fontWeight: '800', color: colors.ink, letterSpacing: -0.3 },
+  brandMeta: { fontSize: 13, color: colors.textSecondary, marginTop: 3 },
+  linkBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 10, alignSelf: 'flex-start' },
+  linkText: { fontSize: 13, fontWeight: '700', color: colors.primary },
+  newTag: {
+    fontSize: 10, fontWeight: '800', color: colors.white, backgroundColor: colors.primary,
+    paddingHorizontal: 6, paddingVertical: 1, borderRadius: 8, overflow: 'hidden', marginLeft: 2,
+  },
+
+  // Payment info
+  payCard: {
+    alignItems: 'center', padding: spacing.lg, borderRadius: radius.lg,
+    backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.divider,
+  },
+  qrFrame: {
+    width: 200, height: 200, borderRadius: radius.md, backgroundColor: colors.white, padding: 10,
+    borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center',
+  },
+  qr: { width: '100%', height: '100%' },
+  qrZoom: {
+    position: 'absolute', right: 8, bottom: 8, width: 26, height: 26, borderRadius: 13,
+    backgroundColor: 'rgba(23,21,59,0.6)', alignItems: 'center', justifyContent: 'center',
+  },
+  qrEmpty: { borderStyle: 'dashed', gap: 8 },
+  qrEmptyText: { fontSize: 12, color: colors.muted, fontWeight: '600' },
+  bankLines: { alignSelf: 'stretch', marginTop: spacing.lg, gap: 10 },
+  bankLine: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  bankLabel: { fontSize: 13, color: colors.textSecondary, width: 110 },
+  bankValue: { flex: 1, fontSize: 14, fontWeight: '700', color: colors.ink, textAlign: 'right' },
+  mono: { letterSpacing: 1, fontVariant: ['tabular-nums'] },
+
+  // QR viewer
+  viewer: { flex: 1, backgroundColor: 'rgba(10,9,28,0.92)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  viewerTop: { position: 'absolute', left: 20, right: 20, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  viewerTitle: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.white },
+  viewerClose: {
+    width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  viewerCard: { width: '100%', maxWidth: 380, aspectRatio: 1, backgroundColor: colors.white, borderRadius: 24, padding: 18 },
+  viewerImage: { width: '100%', height: '100%' },
+  viewerHint: { marginTop: 18, fontSize: 12, color: 'rgba(255,255,255,0.55)' },
   hint: { fontSize: 12, color: colors.muted, lineHeight: 17 },
   chargeHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   addBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },

@@ -2,20 +2,21 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '../../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import { dayLabel, monthLabel, monthsShort } from '../../i18n';
 import Segments from '../../components/Segments';
-import { invoicesApi, pickList, unitsApi, utilityApi } from '../../services/api';
+import { formOptionsApi, invoicesApi, paymentsApi, pickList, unitsApi, utilityApi } from '../../services/api';
+import { PaymentsView } from './PaymentsScreen';
 import { activeContract } from '../units/UnitsScreen';
 import { useAuth } from '../../context/AuthContext';
 import { useApi } from '../../hooks/useApi';
-import { EmptyState, ErrorView, LoadingView, ProgressBar, Screen, SearchBar, Sheet } from '../../components/ui';
+import { EmptyState, ErrorView, FilterChips, LoadingView, ProgressBar, Screen, SearchBar, Sheet } from '../../components/ui';
 import { colors, radius, spacing, toneColors } from '../../theme';
 import { money, thisMonthYM, toNum } from '../../utils/format';
 
-type Tab = 'invoices' | 'readings';
+type Tab = 'invoices' | 'payments' | 'readings';
 type InvoiceFilter = 'all' | 'unpaid' | 'overdue' | 'paid';
 
 type PayState = 'paid' | 'partial' | 'unpaid' | 'cancelled';
@@ -36,11 +37,17 @@ const PAY_TONE: Record<PayState, { fg: string; bg: string }> = {
   paid: toneColors.success, partial: toneColors.warning, unpaid: toneColors.danger, cancelled: toneColors.neutral,
 };
 
+const YM = /^\d{4}-\d{2}/;
+/** The invoice's month: `billingMonth` when it is a real YYYY-MM(-DD), else the due / created date. */
+const invoiceMonth = (i: any): string | undefined =>
+  [i.billingMonth, i.dueDate, i.createdAt].map(v => String(v ?? '')).find(v => YM.test(v));
+
 /** Group rows by "YYYY-MM", newest month first. */
 function byMonth<T>(rows: T[], key: (r: T) => string | null | undefined): [string, T[]][] {
   const map = new Map<string, T[]>();
   rows.forEach(r => {
-    const k = String(key(r) ?? '').slice(0, 7) || '—';
+    const raw = String(key(r) ?? '');
+    const k = YM.test(raw) ? raw.slice(0, 7) : '—';
     map.set(k, [...(map.get(k) ?? []), r]);
   });
   return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
@@ -49,15 +56,39 @@ function byMonth<T>(rows: T[], key: (r: T) => string | null | undefined): [strin
 // ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function BillingScreen() {
-  const [tab, setTab] = useState<Tab>('invoices');
+  const route = useRoute<any>();
+  const [tab, setTab] = useState<Tab>(route.params?.tab ?? 'invoices');
+  // e.g. a payment_pending notification opens Billing → Payments
+  React.useEffect(() => { if (route.params?.tab) setTab(route.params.tab); }, [route.params?.tab]);
+  if (tab === 'payments') {
+    return <PaymentsView header={<BillingHeader tab={tab} onTab={setTab} />} tabBarSpace onChanged={pendingCountChanged} />;
+  }
   return tab === 'invoices' ? <InvoicesTab tab={tab} onTab={setTab} /> : <ReadingsTab tab={tab} onTab={setTab} />;
 }
 
-function BillingHeader({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
+// "To verify" badge on the Payments tab — shared so verifying in the tab updates it right away
+const pendingListeners = new Set<() => void>();
+const pendingCountChanged = () => pendingListeners.forEach(l => l());
+
+function usePendingPayments(enabled: boolean): number {
+  const { propertyId } = useAuth();
+  const q = useApi(() => paymentsApi.pendingCount(), [propertyId], { enabled });
+  React.useEffect(() => {
+    pendingListeners.add(q.reload);
+    return () => { pendingListeners.delete(q.reload); };
+  }, [q.reload]);
+  return q.data ?? 0;
+}
+
+function BillingHeader({ tab, onTab, subtitle }: { tab: Tab; onTab: (t: Tab) => void; subtitle?: string }) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
   const nav = useNavigation<any>();
   const { propertyName, can } = useAuth();
+  const canPayments = can('view', 'payment');
+  const pending = usePendingPayments(canPayments);
+  const tabs: Tab[] = canPayments ? ['invoices', 'payments', 'readings'] : ['invoices', 'readings'];
+  const tabLabel = (k: Tab) => (k === 'invoices' ? t('billing.invoices') : k === 'payments' ? t('payments.title') : t('billing.readings'));
   const canAddReading = tab === 'readings' && can('create', 'utility reading');
 
   return (
@@ -65,7 +96,7 @@ function BillingHeader({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
       <View style={styles.headerRow}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={styles.title}>{t('billing.title')}</Text>
-          <Text style={styles.subtitle} numberOfLines={1}>{propertyName ?? t('billing.allProperties')}</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>{subtitle ?? propertyName ?? t('billing.allProperties')}</Text>
         </View>
         {canAddReading ? (
           <TouchableOpacity
@@ -81,13 +112,18 @@ function BillingHeader({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
 
       {/* Underline tabs */}
       <View style={styles.tabs}>
-        {(['invoices', 'readings'] as Tab[]).map(k => {
+        {tabs.map(k => {
           const active = tab === k;
           return (
             <Pressable key={k} onPress={() => onTab(k)} style={styles.tab} accessibilityRole="tab" accessibilityState={{ selected: active }}>
-              <Text style={[styles.tabText, active && styles.tabTextActive]}>
-                {k === 'invoices' ? t('billing.invoices') : t('billing.readings')}
-              </Text>
+              <View style={styles.tabLabelRow}>
+                <Text style={[styles.tabText, active && styles.tabTextActive]}>{tabLabel(k)}</Text>
+                {k === 'payments' && pending > 0 ? (
+                  <View style={styles.tabBadge}>
+                    <Text style={styles.tabBadgeText}>{pending > 99 ? '99+' : pending}</Text>
+                  </View>
+                ) : null}
+              </View>
               <View style={[styles.tabLine, active && styles.tabLineActive]} />
             </Pressable>
           );
@@ -102,15 +138,23 @@ function BillingHeader({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
 function InvoicesTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   const { t } = useTranslation();
   const nav = useNavigation<any>();
-  const { propertyId } = useAuth();
+  const { propertyId, propertyName } = useAuth();
   const [filter, setFilter] = useState<InvoiceFilter>('all');
+  // Current property by default, like the Payments tab (FRONTEND_UPDATE §9); "All properties" is
+  // one tap away and then every row shows its property name.
+  const [scope, setScope] = useState<'all' | 'current'>('current');
+  const props = useApi(async () => pickList<any>(await formOptionsApi.get(['properties']), 'properties'), [], { refetchOnFocus: false });
+  const propertyCount = props.data?.length ?? 0;
+  const multi = propertyCount > 1;
+  const allScope = scope === 'all' && multi;
   const [month, setMonth] = useState<string | null>(null);
   const [monthSheet, setMonthSheet] = useState(false);
   const [q, setQ] = useState('');
 
   const { data, loading, error, refreshing, refresh } = useApi(
-    async () => pickList(await invoicesApi.list({ sort: '-createdAt', billingMonth: month ?? undefined }), 'invoices'),
-    [propertyId, month],
+    // All pages — the list endpoint is paginated (`total` > first page when there are many invoices)
+    async () => (await invoicesApi.listAll({ sort: '-createdAt', billingMonth: month ?? undefined, allProperties: allScope })).rows,
+    [propertyId, month, allScope],
   );
 
   const all = useMemo(() => data ?? [], [data]);
@@ -144,12 +188,29 @@ function InvoicesTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
       inGroup(i, filter) &&
       (!s || [i.invoiceNumber, i.tenant?.name, i.unit?.unitCode].some(x => String(x ?? '').toLowerCase().includes(s))),
     );
-    return byMonth(list, i => i.billingMonth ?? i.createdAt);
+    return byMonth(list, invoiceMonth);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [all, filter, q]);
 
   return (
-    <Screen tabBarSpace refreshing={refreshing} onRefresh={refresh} header={<BillingHeader tab={tab} onTab={onTab} />} contentStyle={{ paddingTop: spacing.md }}>
+    <Screen
+      tabBarSpace
+      refreshing={refreshing}
+      onRefresh={refresh}
+      header={<BillingHeader tab={tab} onTab={onTab} subtitle={allScope ? t('billing.allProperties') : undefined} />}
+      contentStyle={{ paddingTop: spacing.md }}
+    >
+      {multi ? (
+        <FilterChips<'all' | 'current'>
+          value={scope}
+          onChange={setScope}
+          style={{ marginBottom: spacing.md }}
+          options={[
+            { label: propertyName ?? t('billing.thisProperty'), value: 'current' },
+            { label: t('billing.allProperties'), value: 'all', count: propertyCount },
+          ]}
+        />
+      ) : null}
       {/* Summary */}
       <View style={styles.card}>
         <View style={styles.row}>
@@ -213,35 +274,42 @@ function InvoicesTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
           <View style={styles.listCard}>
             {list.map((inv, i) => {
               const ps = payState(inv);
-              const tc = PAY_TONE[ps];
-              const overdue = ps !== 'cancelled' && isOverdue(inv);
+              const overdue = ps !== 'cancelled' && ps !== 'paid' && isOverdue(inv);
               const left = remainingOf(inv);
+              // One status pill carries the colour: part-paid shows what's left, otherwise the state
+              const pill = ps === 'partial'
+                ? { label: t('billing.left', { amount: money(left, { decimals: 2 }) }), tone: overdue ? toneColors.danger : toneColors.warning }
+                : overdue
+                  ? { label: t('status.overdue'), tone: toneColors.danger }
+                  : { label: t(`invoiceView.ps.${ps}`), tone: PAY_TONE[ps] };
+              const secondary = [
+                t('billing.due', { date: dayLabel(inv.dueDate) }),
+                allScope ? inv.unit?.property?.name : null,
+              ].filter(Boolean).join('  ·  ');
               return (
                 <Pressable
                   key={inv.id}
                   onPress={() => nav.navigate('InvoiceDetail', { invoiceId: inv.id })}
                   style={({ pressed }) => [styles.item, i > 0 && styles.sep, pressed && { backgroundColor: colors.surfaceAlt }]}
+                  accessibilityLabel={`${inv.tenant?.name ?? ''}, ${money(inv.totalAmount, { decimals: 2 })}, ${pill.label}`}
                 >
-                  <View style={[styles.tile, { backgroundColor: tc.bg }]}>
-                    <Text style={[styles.tileText, { color: tc.fg }]} numberOfLines={1} adjustsFontSizeToFit>
+                  <View style={styles.tile}>
+                    <Text style={styles.tileText} numberOfLines={1} adjustsFontSizeToFit>
                       {inv.unit?.unitCode ?? '—'}
                     </Text>
                   </View>
                   <View style={styles.itemBody}>
-                    <Text style={styles.itemTitle} numberOfLines={1}>{inv.tenant?.name ?? t('billing.tenant')}</Text>
-                    <Text style={[styles.itemSub, overdue && { color: colors.danger }]} numberOfLines={1}>
-                      {t('billing.due', { date: dayLabel(inv.dueDate) })}
-                      {inv.invoiceNumber ? <Text style={styles.itemSubMuted}>  ·  {inv.invoiceNumber}</Text> : null}
-                    </Text>
-                  </View>
-                  <View style={styles.itemRight}>
-                    <Text style={styles.amount}>{money(inv.totalAmount, { decimals: 2 })}</Text>
-                    <View style={styles.statusRow}>
-                      <View style={[styles.dot, { backgroundColor: overdue ? colors.danger : tc.fg }]} />
-                      <Text style={[styles.statusText, { color: overdue ? colors.danger : tc.fg }]} numberOfLines={1}>
-                        {overdue ? t('status.overdue') : t(`invoiceView.ps.${ps}`)}
-                        {ps === 'partial' ? ` · ${t('billing.left', { amount: money(left, { decimals: 2 }) })}` : ''}
+                    <View style={styles.itemLine}>
+                      <Text style={styles.itemTitle} numberOfLines={1}>{inv.tenant?.name ?? t('billing.tenant')}</Text>
+                      <Text style={[styles.amount, ps === 'cancelled' && styles.amountCancelled]}>
+                        {money(inv.totalAmount, { decimals: 2 })}
                       </Text>
+                    </View>
+                    <View style={[styles.itemLine, { marginTop: 6 }]}>
+                      <Text style={[styles.itemSub, overdue && { color: colors.danger }]} numberOfLines={1}>{secondary}</Text>
+                      <View style={[styles.pill, { backgroundColor: pill.tone.bg }]}>
+                        <Text style={[styles.pillText, { color: pill.tone.fg }]} numberOfLines={1}>{pill.label}</Text>
+                      </View>
                     </View>
                   </View>
                 </Pressable>
@@ -592,6 +660,12 @@ const styles = StyleSheet.create({
   tab: { paddingTop: 4 },
   tabText: { fontSize: 14, fontWeight: '500', color: colors.muted, paddingBottom: 10 },
   tabTextActive: { color: colors.ink, fontWeight: '700' },
+  tabLabelRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 5 },
+  tabBadge: {
+    minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 5, marginTop: -1,
+    backgroundColor: colors.danger, alignItems: 'center', justifyContent: 'center',
+  },
+  tabBadgeText: { fontSize: 10, fontWeight: '800', color: colors.white },
   tabLine: { height: 2, borderRadius: 1, backgroundColor: 'transparent', marginBottom: -1 },
   tabLineActive: { backgroundColor: colors.primary },
 
@@ -629,16 +703,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface, borderRadius: radius.xl, overflow: 'hidden',
     borderWidth: 1, borderColor: colors.divider,
   },
-  item: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: spacing.lg },
+  item: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: spacing.lg },
   sep: { borderTopWidth: 1, borderTopColor: colors.divider },
-  tile: { width: 52, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-  tileText: { fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
+  tile: {
+    width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
+    backgroundColor: colors.bg,
+  },
+  tileText: { fontSize: 14, fontWeight: '700', color: colors.ink },
   itemBody: { flex: 1, minWidth: 0 },
-  itemTitle: { fontSize: 15, fontWeight: '600', color: colors.ink },
-  itemSub: { fontSize: 12, color: colors.textSecondary, marginTop: 3 },
+  itemLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  itemTitle: { flex: 1, fontSize: 15, fontWeight: '700', color: colors.ink },
+  itemSub: { flex: 1, fontSize: 12, color: colors.textSecondary },
   itemSubMuted: { color: colors.muted },
   itemRight: { alignItems: 'flex-end' },
-  amount: { fontSize: 14, fontWeight: '600', color: colors.ink },
+  amount: { fontSize: 15, fontWeight: '700', color: colors.ink, fontVariant: ['tabular-nums'] },
+  amountCancelled: { color: colors.muted, textDecorationLine: 'line-through' },
+  pill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill, flexShrink: 0 },
+  pillText: { fontSize: 11, fontWeight: '700' },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
   dot: { width: 6, height: 6, borderRadius: 3 },
   statusText: { fontSize: 11, fontWeight: '600' },

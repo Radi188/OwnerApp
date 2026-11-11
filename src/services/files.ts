@@ -49,8 +49,21 @@ export async function downloadAndOpen(path: string, fallbackName: string, mime: 
   if (await ReactNativeBlobUtil.fs.exists(target)) await ReactNativeBlobUtil.fs.unlink(target);
   await ReactNativeBlobUtil.fs.mv(saved, target);
 
-  if (Platform.OS === 'ios') await ReactNativeBlobUtil.ios.openDocument(target);
-  else await ReactNativeBlobUtil.android.actionViewIntent(target, mime);
+  await openFile(target, mime);
+}
+
+/** Open a local file in the system viewer (Quick Look on iOS — with Share / Save to Files / Print). */
+export async function openFile(path: string, mime: string): Promise<void> {
+  if (Platform.OS === 'ios') await ReactNativeBlobUtil.ios.openDocument(path);
+  else await ReactNativeBlobUtil.android.actionViewIntent(path, mime);
+}
+
+/** Write base64 content to the cache folder and return the file path (existing file is replaced). */
+export async function writeCacheFile(fileName: string, base64: string): Promise<string> {
+  const path = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/${safe(fileName)}`;
+  if (await ReactNativeBlobUtil.fs.exists(path)) await ReactNativeBlobUtil.fs.unlink(path);
+  await ReactNativeBlobUtil.fs.writeFile(path, base64, 'base64');
+  return path;
 }
 
 export const MIME = {

@@ -26,13 +26,30 @@ export const num = (v: unknown): number => Number(v ?? 0) || 0;
 /** "85.50%" | "85.50" | 0 → 85.5 */
 export const pct = (v: unknown): number => parseFloat(String(v ?? 0).replace('%', '')) || 0;
 
-const DEVICE_ID = 'owner-mobile-' + Math.random().toString(36).substring(2, 10);
+const KEY_DEVICE_ID = '@owner:deviceId';
+let _deviceId: string | null = null;
+
+/**
+ * Stable per-install device ID (FRONTEND_GUIDE §2: `x-device-id` must be stable). Generated once,
+ * then kept in storage — previously a new random ID was made on every app start.
+ */
+export async function getDeviceId(): Promise<string> {
+  if (_deviceId) return _deviceId;
+  try {
+    const saved = await AsyncStorage.getItem(KEY_DEVICE_ID);
+    if (saved) return (_deviceId = saved);
+  } catch { /* fall through and create one */ }
+  const rand = () => Math.random().toString(36).slice(2, 10);
+  _deviceId = `owner-mobile-${Date.now().toString(36)}-${rand()}${rand()}`;
+  AsyncStorage.setItem(KEY_DEVICE_ID, _deviceId).catch(() => {});
+  return _deviceId;
+}
 const KEY_ACCESS_TOKEN = '@owner:access';
 const KEY_REFRESH_TOKEN = '@owner:refresh';
 
 let _accessToken: string | null = null;
 let _refreshToken: string | null = null;
-let _refreshPromise: Promise<boolean> | null = null;
+let _refreshPromise: Promise<RefreshOutcome> | null = null;
 let _activePropertyId: number | null = null;
 
 /** Lists & reports are scoped to this property (the API returns every property otherwise). */
@@ -53,13 +70,8 @@ export function setSessionExpiredHandler(fn: SessionExpiredHandler) {
 export function setTokens(access: string, refresh: string) {
   _accessToken = access;
   _refreshToken = refresh;
-  // Persist in background
-  try {
-    AsyncStorage.setItem(KEY_ACCESS_TOKEN, access).catch(() => {});
-  } catch {}
-  try {
-    AsyncStorage.setItem(KEY_REFRESH_TOKEN, refresh).catch(() => {});
-  } catch {}
+  // Persist both in one write so a crash can never leave a mismatched pair (refresh rotates both)
+  AsyncStorage.multiSet([[KEY_ACCESS_TOKEN, access], [KEY_REFRESH_TOKEN, refresh]]).catch(() => {});
 }
 
 /** Absolute URL + auth header for raw downloads (files can't go through apiFetch's JSON parsing). */
@@ -72,12 +84,7 @@ export function apiRequestInfo(path: string): { url: string; headers: Record<str
 export function clearTokens() {
   _accessToken = null;
   _refreshToken = null;
-  try {
-    AsyncStorage.removeItem(KEY_ACCESS_TOKEN).catch(() => {});
-  } catch {}
-  try {
-    AsyncStorage.removeItem(KEY_REFRESH_TOKEN).catch(() => {});
-  } catch {}
+  AsyncStorage.multiRemove([KEY_ACCESS_TOKEN, KEY_REFRESH_TOKEN]).catch(() => {});
 }
 
 /** Load persisted tokens from storage into memory. Returns tokens if found. */
@@ -86,8 +93,7 @@ export async function loadStoredTokens(): Promise<{
   refresh: string;
 } | null> {
   try {
-    const access = await AsyncStorage.getItem(KEY_ACCESS_TOKEN);
-    const refresh = await AsyncStorage.getItem(KEY_REFRESH_TOKEN);
+    const [[, access], [, refresh]] = await AsyncStorage.multiGet([KEY_ACCESS_TOKEN, KEY_REFRESH_TOKEN]);
     if (access && refresh) {
       _accessToken = access;
       _refreshToken = refresh;
@@ -101,31 +107,50 @@ export async function loadStoredTokens(): Promise<{
 
 // ─── Error class ─────────────────────────────────────────────────────────────
 
+/**
+ * API error. `code` / `data` are set when the server sends them (FRONTEND_UPDATE 2026-11-11 §6),
+ * e.g. code TENANT_EXISTS with data.tenant — check `code`, never the message text.
+ */
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public code?: string, public data?: any) {
     super(message);
   }
 }
 
 // ─── Refresh ──────────────────────────────────────────────────────────────────
 
-async function doRefresh(): Promise<boolean> {
-  if (!_refreshToken) return false;
+/**
+ * 'ok'       → new tokens saved (refresh rotates both — FRONTEND_GUIDE §3)
+ * 'rejected' → the server refused the refresh token (expired, or the account signed in elsewhere:
+ *              the server keeps one refresh token per user) → the session really is over
+ * 'offline'  → network / server trouble → keep the tokens, just fail this request
+ */
+type RefreshOutcome = 'ok' | 'rejected' | 'offline';
+
+async function doRefresh(): Promise<RefreshOutcome> {
+  const sent = _refreshToken;
+  if (!sent) return 'rejected';
   try {
     const res = await fetch(`${BASE_URL}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: _refreshToken }),
+      body: JSON.stringify({ refreshToken: sent }),
     });
-    if (!res.ok) return false;
-    const data = await res.json();
-    if (data.accessToken && data.refreshToken) {
-      setTokens(data.accessToken, data.refreshToken);
-      return true;
+    if (res.status === 401 || res.status === 403 || res.status === 400) {
+      // Another request may have rotated the tokens while this one was in flight
+      return _refreshToken && _refreshToken !== sent ? 'ok' : 'rejected';
     }
-    return false;
+    if (!res.ok) return 'offline';
+    const data = await parseBody(res);
+    const access = data?.accessToken ?? data?.data?.accessToken;
+    const refresh = data?.refreshToken ?? data?.data?.refreshToken;
+    if (access && refresh) {
+      setTokens(access, refresh);
+      return 'ok';
+    }
+    return 'offline';
   } catch {
-    return false;
+    return 'offline';
   }
 }
 
@@ -152,13 +177,23 @@ export function toQuery(params: Record<string, unknown> = {}): string {
   return parts.length ? `?${parts.join('&')}` : '';
 }
 
-/** Build multipart form data, skipping undefined/null values. Arrays repeat the key. */
+/** A local file picked on the device (image picker / camera), sent as a multipart file part. */
+export type UploadFile = { uri: string; name: string; type: string };
+
+export const isUploadFile = (v: unknown): v is UploadFile =>
+  !!v && typeof v === 'object' && typeof (v as any).uri === 'string' && /^(file|content|ph|assets-library):/.test((v as any).uri);
+
+/**
+ * Build multipart form data, skipping undefined/null values. Arrays repeat the key, picked files
+ * (`{ uri, name, type }`) are sent as file parts, other objects as JSON strings.
+ */
 export function toForm(fields: Record<string, unknown>): FormData {
   const form = new FormData();
   Object.keys(fields).forEach(k => {
     const v = fields[k];
     if (v === undefined || v === null) return;
-    if (Array.isArray(v)) v.forEach(item => form.append(k, String(item)));
+    if (isUploadFile(v)) form.append(k, v as any);
+    else if (Array.isArray(v)) v.forEach(item => form.append(k, String(item)));
     else if (typeof v === 'object') form.append(k, JSON.stringify(v));
     else form.append(k, String(v));
   });
@@ -193,15 +228,19 @@ export async function apiFetch<T = any>(
   if (res.status === 401) {
     const wasAuthenticated = !!_refreshToken;
 
-    // Step 1: try silent token refresh (only if we had tokens)
+    // Step 1: try silent token refresh (only if we had tokens) — one refresh for all parallel 401s
     if (_refreshToken) {
       if (!_refreshPromise) {
         _refreshPromise = doRefresh().finally(() => {
           _refreshPromise = null;
         });
       }
-      const refreshed = await _refreshPromise;
-      if (refreshed) {
+      const outcome = await _refreshPromise;
+      if (outcome === 'offline') {
+        // Don't end the session over a network blip — keep the tokens and let the user retry
+        throw new ApiError(0, i18n.t('auth.networkError', { defaultValue: 'Network problem. Check your connection and try again.' }));
+      }
+      if (outcome === 'ok') {
         res = await makeRequest();
       }
     }
@@ -226,7 +265,7 @@ export async function apiFetch<T = any>(
 
   const data = await parseBody(res);
   if (!res.ok) {
-    throw new ApiError(res.status, data?.message ?? 'Request failed');
+    throw new ApiError(res.status, data?.message ?? 'Request failed', data?.code, data?.data);
   }
   return data as T;
 }
@@ -248,17 +287,19 @@ const json = (method: string, body?: unknown): RequestInit => ({
 export const authApi = {
   lookupProperties: (username: string) =>
     apiFetch('/auth/lookup-properties', json('POST', { username })),
-  login: (username: string, password: string, propertyId?: number) =>
-    apiFetch('/auth/login', {
+  login: async (username: string, password: string, propertyId?: number) => {
+    const deviceId = await getDeviceId();
+    return apiFetch('/auth/login', {
       method: 'POST',
-      headers: { 'x-platform': 'mobile', 'x-device-id': DEVICE_ID },
+      headers: { 'x-platform': 'mobile', 'x-device-id': deviceId },
       body: JSON.stringify({
         username,
         password,
-        deviceId: DEVICE_ID,
+        deviceId,
         ...(propertyId != null ? { propertyId } : {}),
       }),
-    }),
+    });
+  },
   /** Removes this device's push token first, then clears the refresh token on the server. */
   logout: () =>
     notificationsApi.unregisterToken().catch(() => {}).then(() => apiFetch('/auth/logout', { method: 'POST' })),
@@ -271,8 +312,17 @@ export const authApi = {
     apiFetch('/auth/reset-password', json('POST', { identifier, resetToken, newPassword, confirmPassword })),
   switchProperty: (propertyId: number) =>
     apiFetch('/auth/switch-property', json('POST', { propertyId })),
-  changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) =>
-    apiFetch('/auth/change-password', json('POST', { currentPassword, newPassword, confirmPassword })),
+  /**
+   * Signs out every other session of the account. Returns new tokens for this device
+   * (FRONTEND_UPDATE §8) — they are saved here so this session keeps working.
+   */
+  changePassword: async (currentPassword: string, newPassword: string, confirmPassword: string) => {
+    const r: any = await apiFetch('/auth/change-password', json('POST', { currentPassword, newPassword, confirmPassword }));
+    const access = r?.accessToken ?? r?.data?.accessToken;
+    const refresh = r?.refreshToken ?? r?.data?.refreshToken;
+    if (access && refresh) setTokens(access, refresh);
+    return { ...r, tokensRenewed: !!(access && refresh) };
+  },
 };
 
 export type ListParams = {
@@ -298,6 +348,31 @@ const legacyList = (path: string, qs: string) => {
 };
 
 const del = (path: string) => apiFetch(path, { method: 'DELETE' });
+
+/**
+ * Loads every row of a paginated list. The API returns `{ result, total, data: { <key>: [...] } }`
+ * (FRONTEND_GUIDE §2). Pages are requested one by one with the same `limit` until we have `total`
+ * rows — the server can return short pages (a page with `limit=12` may hold only 6 invoices when
+ * related rows are joined), so we never assume a page is full. Rows are de-duplicated by `id`.
+ */
+export async function fetchAllPages<T = any>(
+  load: (page: number, limit: number) => Promise<any>,
+  { limit = 200, maxPages = 50, keys = [] as string[] } = {},
+): Promise<{ rows: T[]; total: number }> {
+  const byId = new Map<unknown, T>();
+  let total = 0;
+  for (let page = 1; page <= maxPages; page++) {
+    const res = await load(page, limit);
+    const rows: T[] = pickList<T>(res, ...keys);
+    total = Math.max(total, Number(res?.total ?? res?.result ?? 0) || 0);
+    const before = byId.size;
+    rows.forEach((r: any) => byId.set(r?.id ?? JSON.stringify(r), r));
+    const added = byId.size - before;
+    // Done when the server has nothing more, nothing new arrived, or we hold every row
+    if (rows.length === 0 || added === 0 || byId.size >= total) break;
+  }
+  return { rows: [...byId.values()], total: Math.max(total, byId.size) };
+}
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 export const usersApi = {
@@ -415,6 +490,8 @@ export type TenantInput = {
   gender?: Gender | '' | null;
   /** ID card number (the photo is `idCardPassport`). */
   idNumber?: string;
+  /** ID card / passport photo — a picked file (multipart). */
+  idCardPassport?: UploadFile;
   emergencyContact?: string;
   occupation?: string;
   status?: string;
@@ -422,6 +499,18 @@ export type TenantInput = {
   vehicleType?: string;
   vehicleModel?: string;
   propertyId?: number;
+  /** Create only — people living with the tenant (sent as a JSON string in the multipart body). */
+  occupants?: OccupantDraft[];
+};
+
+/** Occupant as sent inside `POST /tenants` (no tenantId yet). */
+export type OccupantDraft = {
+  name: string;
+  relationship?: string;
+  phoneNumber?: string;
+  plateNumber?: string;
+  vehicleType?: string;
+  vehicleModel?: string;
 };
 
 export const tenantsApi = {
@@ -431,20 +520,40 @@ export const tenantsApi = {
   invoices: (id: number, range: string) => apiFetch(`/tenants/${id}/invoices?range=${range}`),
   /** → `{ tenant, credentials: { username, password, qrDataURL } }` — the password is shown only once. */
   create: (data: TenantInput): Promise<{ tenant: any; credentials: TenantCredentials | null }> =>
-    apiFetch('/tenants', { method: 'POST', body: toForm(data) }).then((r: any) => ({
+    apiFetch('/tenants', {
+      method: 'POST',
+      // toForm() would send an array as repeated fields — the API wants `occupants` as one JSON string
+      body: toForm({ ...data, occupants: data.occupants?.length ? JSON.stringify(data.occupants) : undefined }),
+    }).then((r: any) => ({
       tenant: r?.data?.tenant ?? null,
       credentials: r?.data?.credentials ?? null,
     })),
   update: (id: number, data: Partial<TenantInput>) =>
     apiFetch(`/tenants/${id}`, { method: 'PATCH', body: toForm(data) }),
   remove: (id: number) => del(`/tenants/${id}`),
-  /** New password + QR (the old password stops working). Same credentials shape as create. */
+  /**
+   * Reset login QR: a NEW password + QR (the old one stops working and the tenant is signed out
+   * everywhere). Response `data: { qrDataURL, credentials: { username, password } }` — the QR sits
+   * next to `credentials`, so it is merged in here. Show once; never store.
+   */
   regenerateLogin: (id: number): Promise<TenantCredentials | null> =>
-    apiFetch(`/tenants/${id}/regenerate-qr`, { method: 'POST' }).then((r: any) => r?.data?.credentials ?? r?.credentials ?? null),
+    apiFetch(`/tenants/${id}/regenerate-qr`, { method: 'POST' }).then((r: any) => {
+      const d = r?.data ?? r;
+      const c = d?.credentials ?? null;
+      return c ? { ...c, qrDataURL: c.qrDataURL ?? d?.qrDataURL ?? d?.qrDataUrl } : null;
+    }),
+  /** Restore a deleted tenant (keeps their old login). Optional `propertyId` to register them to. → tenant */
+  restore: (id: number, propertyId?: number) =>
+    apiFetch(`/tenants/${id}/restore`, json('POST', propertyId ? { propertyId } : {})).then((r: any) => r?.data?.tenant ?? r?.data ?? r),
+  /** Personal Telegram invite (7 days; a new one cancels the old). → `{ deepLink, qrDataUrl, expiresAt, alreadyLinked, shareText }` */
+  telegramInvite: (id: number) =>
+    apiFetch(`/tenants/${id}/telegram-invite`, { method: 'POST' }).then((r: any) => r?.data ?? r),
 };
 
 export type OccupantInput = {
   tenantId: number;
+  /** ID card / passport photo — a picked file (multipart). */
+  idCardPassport?: UploadFile;
   name: string;
   relationship?: string;
   phoneNumber?: string;
@@ -535,14 +644,25 @@ export const invoicesApi = {
       ? legacyList('/invoices', qsOrParams)
       : scopedList('/invoices', qsOrParams),
   get: (id: number) => apiFetch(`/invoices/${id}`),
+  /**
+   * Every invoice matching `params` (all pages). Default scope is the current property; pass
+   * `{ allProperties: true }` for every property the user is assigned to (what the web dashboard
+   * shows — it calls /invoices without propertyId).
+   */
+  listAll: ({ allProperties, ...params }: ListParams & { allProperties?: boolean } = {}) =>
+    fetchAllPages(
+      (page, limit) => (allProperties ? list : scopedList)('/invoices', { ...params, page, limit }),
+      { keys: ['invoices', 'invoice'] },
+    ),
   /** Manual invoice (corrections / missed by the daily job). One per tenancy per billingMonth. */
   create: (body: { contractId: number; billingMonth?: string; dueDate?: string; discount?: number }) =>
     apiFetch('/invoices', json('POST', body)),
-  /** Amounts can't be edited — change the total with `discount`, or cancel. */
-  update: (id: number, body: { status?: InvoiceStatus; discount?: number; note?: string; dueDate?: string }) =>
+  /**
+   * Only draft / sent / cancelled can be set by hand — paid, partial and overdue always come from
+   * payments (FRONTEND_UPDATE §10). To "mark as paid", record a payment for `remainingAmount`.
+   */
+  update: (id: number, body: { status?: 'draft' | 'sent' | 'cancelled'; discount?: number; note?: string; dueDate?: string }) =>
     apiFetch(`/invoices/${id}`, json('PATCH', body)),
-  /** @deprecated use `update(id, { status })` */
-  updateStatus: (id: number, status: string) => apiFetch(`/invoices/${id}`, json('PATCH', { status })),
   /** Cancelling releases the invoice's meter readings onto the next invoice. */
   cancel: (id: number) => apiFetch(`/invoices/${id}`, json('PATCH', { status: 'cancelled' })),
   remove: (id: number) => del(`/invoices/${id}`),
@@ -561,6 +681,8 @@ export type PaymentInput = {
   /** Bank / KHQR reference */
   transactionId?: string;
   note?: string;
+  /** Receipt photo (multipart). On edit, `''` removes the current one. */
+  attachment?: UploadFile | '';
 };
 
 export const paymentsApi = {
@@ -572,9 +694,12 @@ export const paymentsApi = {
     apiFetch('/payments', { method: 'POST', body: toForm(body) }).then((r: any) => r?.data?.payment ?? r?.payment ?? r),
   verify: (id: number, status: 'verified' | 'rejected', note?: string) =>
     apiFetch(`/payments/${id}/verify`, json('POST', { status, note })),
-  /** Can change amount, date, method, reference, note — not status or invoiceId. */
+  /**
+   * Can change amount, date, method, reference, note and the receipt — not status or invoiceId.
+   * Multipart so a new receipt can be uploaded (`attachment: ''` removes it). FRONTEND_UPDATE §12.
+   */
   update: (id: number, body: Partial<Omit<PaymentInput, 'invoiceId'>>) =>
-    apiFetch(`/payments/${id}`, json('PATCH', body)),
+    apiFetch(`/payments/${id}`, { method: 'PATCH', body: toForm(body) }),
   remove: (id: number) => del(`/payments/${id}`),
   /** Count for the "to verify" badge. */
   pendingCount: async (): Promise<number> => {
@@ -762,8 +887,8 @@ export const notificationsApi = {
     sendToTelegram?: boolean;
   }) => apiFetch('/notifications', json('POST', body)),
   markRead: (id: number) => apiFetch(`/notifications/${id}/read`, { method: 'PATCH' }),
-  registerToken: (token: string) =>
-    apiFetch('/notifications/token', json('POST', { token, fcmToken: token, deviceId: DEVICE_ID })),
+  registerToken: async (token: string) =>
+    apiFetch('/notifications/token', json('POST', { token, fcmToken: token, deviceId: await getDeviceId() })),
   unregisterToken: (token?: string) =>
     apiFetch('/notifications/token', json('DELETE', token ? { token, fcmToken: token } : undefined)),
 };
@@ -781,6 +906,8 @@ export const telegramApi = {
   /** → `{ deepLink, token, expiresIn }` — open deepLink, then poll status every 3 s. */
   generateLink: () => apiFetch('/telegram/generate-link', { method: 'POST' }).then(rdata),
   unlink: () => apiFetch('/telegram/unlink', { method: 'POST' }),
+  /** One join QR for every tenant: scan → Start → share phone number. → `{ link, qrDataUrl }` */
+  joinLink: () => apiFetch('/telegram/join-link').then(rdata),
 };
 
 // ─── Response helpers ─────────────────────────────────────────────────────────

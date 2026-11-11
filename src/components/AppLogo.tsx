@@ -1,52 +1,62 @@
 import React from 'react';
 import { View, Image, StyleSheet } from 'react-native';
+import { colors } from '../theme';
 
 type Props = {
   size?: 'sm' | 'md' | 'lg';
-  variant?: 'light' | 'dark';
+  /**
+   * - `dark`  — for indigo / dark backgrounds: white Pteah symbol, no container
+   *             (brand guide: "white logo on Pteah Indigo").
+   * - `light` — for white / light backgrounds: the indigo app-icon tile.
+   * - `mark`  — for white / light backgrounds: indigo symbol, no container.
+   */
+  variant?: 'light' | 'dark' | 'mark';
 };
 
 const SIZES = {
-  sm: { container: 52 },
-  md: { container: 80 },
-  lg: { container: 110 },
+  sm: 52,
+  md: 80,
+  lg: 110,
 };
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const ICON_IMAGE = require('../assets/app_icon.png');
+const SYMBOL_WHITE = require('../assets/brand/pteah-symbol-white.png');
+const SYMBOL_INDIGO = require('../assets/brand/pteah-symbol.png');
+const APP_ICON = require('../assets/brand/pteah-app-icon.png');
 
-export default function AppLogo({ size = 'md' }: Props) {
+export default function AppLogo({ size = 'md', variant = 'light' }: Props) {
   const d = SIZES[size];
 
+  if (variant === 'light') {
+    return (
+      <View style={[styles.tileShadow, { width: d, height: d }]}>
+        <Image
+          source={APP_ICON}
+          style={{ width: d, height: d }}
+          resizeMode="contain"
+          accessibilityLabel="Pteah Manager"
+        />
+      </View>
+    );
+  }
+
   return (
-    <View style={[styles.wrapper, { width: d.container, height: d.container }]}>
-      <Image
-        source={ICON_IMAGE}
-        style={[
-          styles.icon,
-          {
-            width: d.container,
-            height: d.container,
-            borderRadius: d.container / 4.5,
-          },
-        ]}
-        resizeMode="cover"
-      />
-    </View>
+    <Image
+      source={variant === 'dark' ? SYMBOL_WHITE : SYMBOL_INDIGO}
+      style={{ width: d, height: d }}
+      resizeMode="contain"
+      accessibilityLabel="Pteah Manager"
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  wrapper: {
+  tileShadow: {
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#0F766E',
+    shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
+    shadowOpacity: 0.35,
     shadowRadius: 16,
     elevation: 12,
-  },
-  icon: {
-    overflow: 'hidden',
   },
 });

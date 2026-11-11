@@ -8,6 +8,7 @@ import { useApi } from '../hooks/useApi';
 import { telegramApi } from '../services/api';
 import { colors, radius, spacing } from '../theme';
 import { errMsg } from '../utils/format';
+import { toast } from '../components/Toast';
 
 const TELEGRAM_BLUE = '#229ED9';
 
@@ -39,14 +40,14 @@ export default function TelegramScreen() {
       deadline.current = Date.now() + (Number(link.expiresIn) || 300) * 1000;
       setWaiting(true);
       poll.current = setInterval(async () => {
-        if (Date.now() > deadline.current) { stopPolling(); Alert.alert(t('telegram.expired')); return; }
+        if (Date.now() > deadline.current) { stopPolling(); toast.warning(t('telegram.expired')); return; }
         try {
           const s: any = await telegramApi.status();
           if (s?.isLinked) { stopPolling(); status.setData(s); }
         } catch { /* keep polling */ }
       }, 3000);
     } catch (e) {
-      Alert.alert(t('common.error'), errMsg(e));
+      toast.error(errMsg(e));
     } finally {
       setBusy(false);
     }
@@ -57,7 +58,7 @@ export default function TelegramScreen() {
     {
       text: t('telegram.unlink'), style: 'destructive',
       onPress: async () => {
-        try { await telegramApi.unlink(); await status.reload(); } catch (e) { Alert.alert(t('common.error'), errMsg(e)); }
+        try { await telegramApi.unlink(); await status.reload(); } catch (e) { toast.error(errMsg(e)); }
       },
     },
   ]);

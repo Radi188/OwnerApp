@@ -7,8 +7,7 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import { useBadges } from '../context/BadgeContext';
-import { authApi, paymentsApi } from '../services/api';
-import { useApi } from '../hooks/useApi';
+import { authApi } from '../services/api';
 import { Screen } from '../components/ui';
 import { colors, radius, spacing } from '../theme';
 import { initials } from '../utils/format';
@@ -26,7 +25,6 @@ export default function MoreScreen() {
   const { user, propertyName, can } = auth;
   const { requestCount, notificationCount } = useBadges();
   // Tenant payments waiting for staff to verify (badge on the Payments row)
-  const pending = useApi(() => paymentsApi.pendingCount().catch(() => 0), [auth.propertyId]);
 
   const toggleLanguage = () => { i18n.changeLanguage(i18n.language === 'km' ? 'en' : 'km'); };
 
@@ -48,7 +46,6 @@ export default function MoreScreen() {
     {
       title: t('more.operations'),
       items: [
-        { key: 'payments', icon: 'cash-outline', label: t('more.payments'), route: 'Payments', module: 'payment', badge: pending.data ?? 0 },
         { key: 'expenses', icon: 'wallet-outline', label: t('more.expenses'), route: 'Expenses', module: 'transaction' },
         { key: 'contracts', icon: 'document-text-outline', label: t('more.contracts'), route: 'Contracts', module: 'contract' },
         { key: 'maintenance', icon: 'construct-outline', label: t('more.maintenance'), route: 'Requests', module: 'maintenance', badge: requestCount },

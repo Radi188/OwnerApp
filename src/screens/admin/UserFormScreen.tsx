@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { Text } from '../../components/Text';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -10,13 +10,15 @@ import { required, useForm } from '../../hooks/useForm';
 import { Button, Card, confirmAction, Header, Screen, SelectField, SwitchRow, TextField } from '../../components/ui';
 import { colors, font, radius, spacing } from '../../theme';
 import { errMsg } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 export default function UserFormScreen() {
   const nav = useNavigation<any>();
   const user = useRoute<any>().params?.user;
   const editing = !!user;
-  const { can, user: me } = useAuth();
-  const canAssign = can('assign', 'properties');
+  const { can, hasPermission, user: me } = useAuth();
+  // Exact name: `assign properties` lives under the user feature, so can('assign', 'properties') missed it
+  const canAssign = hasPermission('assign properties');
 
   // Properties I manage (only these can be assigned) + the user's current assignments
   const myProps = useApi(async () => pickList(await propertiesApi.list(), 'properties'), [], { refetchOnFocus: false });
@@ -64,10 +66,10 @@ export default function UserFormScreen() {
     }
     // Replaces the user's assignments among *my* properties — send every checked box
     if (canAssign && id) await usersApi.assignProperties(id, [...propIds]);
-  }, () => nav.goBack());
+  }, () => nav.goBack(), { success: editing ? 'User updated' : 'User created' });
 
   const onDelete = () => confirmAction('Delete user', `Delete ${user?.username}? They will no longer be able to sign in.`, async () => {
-    try { await usersApi.remove(user.id); nav.goBack(); } catch (e) { Alert.alert('Delete failed', errMsg(e)); }
+    try { await usersApi.remove(user.id); toast.deleted(); nav.goBack(); } catch (e) { toast.error(errMsg(e), { title: 'Delete failed' }); }
   });
 
   const isMe = user?.id === me?.id;

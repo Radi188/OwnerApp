@@ -16,6 +16,7 @@ import type { MoveOutBody, RentMode, Settlement } from '../../services/types';
 import { activeContract } from '../units/UnitsScreen';
 import { colors, radius, spacing } from '../../theme';
 import { errMsg, money, todayYMD } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 /**
  * Move a tenant out (FRONTEND_GUIDE §9): the settlement is previewed live on every change
@@ -116,7 +117,7 @@ export default function MoveOutScreen() {
         try {
           setDone(await tenancyApi.moveOut(unitId, body));
         } catch (e) {
-          Alert.alert(t('common.error'), errMsg(e));
+          toast.error(errMsg(e));
         } finally {
           setSaving(false);
         }
@@ -163,7 +164,7 @@ export default function MoveOutScreen() {
           visible={paySheet}
           invoice={fi?.id ? { id: fi.id, invoiceNumber: fi.invoiceNumber, totalAmount: fi.totalAmount, remainingAmount: fi.remainingAmount ?? fi.totalAmount, pendingAmount: 0, tenant: done.tenant } : null}
           onClose={() => setPaySheet(false)}
-          onSaved={() => { setPaySheet(false); Alert.alert(t('moveIn.paymentSaved')); }}
+          onSaved={() => { setPaySheet(false); toast.success(t('moveIn.paymentSaved')); }}
         />
       </Screen>
     );

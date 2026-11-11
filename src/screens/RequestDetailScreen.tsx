@@ -24,6 +24,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { RequestsStackParamList } from '../navigation/AppNavigator';
 import { maintenanceApi, usersApi, pickOne } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { toast } from '../components/Toast';
 
 type MaintenanceStatus =
   | 'pending'
@@ -52,7 +53,7 @@ const PRIORITY_META: Record<
   { label: string; color: string; bg: string }
 > = {
   low: { label: 'Low', color: '#16A34A', bg: '#DCFCE7' },
-  medium: { label: 'Medium', color: '#0F766E', bg: '#F0FDFA' },
+  medium: { label: 'Medium', color: '#554ADF', bg: '#F1F0FD' },
   high: { label: 'High', color: '#EA580C', bg: '#FFF7ED' },
   urgent: { label: 'Urgent', color: '#DC2626', bg: '#FEF2F2' },
 };
@@ -153,7 +154,7 @@ export default function RequestDetailScreen() {
       setStatus('assigned');
       setItem((prev: any) => ({ ...prev, assignedUser: emp, status: 'assigned' }));
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to assign.');
+      toast.error(e?.message ?? 'Failed to assign.');
     } finally {
       setUpdating(false);
     }
@@ -189,7 +190,7 @@ export default function RequestDetailScreen() {
             setStatus(next.key);
             setItem((prev: any) => ({ ...prev, status: next.key }));
           } catch (e: any) {
-            Alert.alert('Error', e?.message ?? 'Failed to update status.');
+            toast.error(e?.message ?? 'Failed to update status.');
           } finally {
             setUpdating(false);
           }
@@ -219,14 +220,16 @@ export default function RequestDetailScreen() {
       setShowCompleteSheet(false);
       // A cost creates an expense automatically (FRONTEND_GUIDE §14) — tell the user
       if (cost != null && cost > 0) {
-        Alert.alert(
-          'Request completed',
+        toast.success(
           'An expense of $' + cost.toFixed(2) + ' was recorded.'
             + (completeIsBillable ? ' It will be added to the tenant\'s next invoice, or you can bill it now.' : ''),
+          { title: 'Request completed', duration: 5000 },
         );
+      } else {
+        toast.success('Request completed');
       }
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to complete request.');
+      toast.error(e?.message ?? 'Failed to complete request.');
     } finally {
       setCompleting(false);
     }
@@ -247,9 +250,9 @@ export default function RequestDetailScreen() {
             const inv = res?.data?.invoice ?? res?.data?.invoices ?? res?.invoice;
             setItem((prev: any) => ({ ...prev, invoiceId: inv?.id ?? true }));
             if (inv?.id) navigation.navigate('InvoiceDetail', { invoiceId: inv.id });
-            else Alert.alert('Invoice created');
+            else toast.success('Invoice created');
           } catch (e: any) {
-            Alert.alert('Error', e?.message ?? 'Could not create the invoice.');
+            toast.error(e?.message ?? 'Could not create the invoice.');
           } finally {
             setInvoicing(false);
           }
@@ -271,7 +274,7 @@ export default function RequestDetailScreen() {
             setStatus('cancelled');
             setItem((prev: any) => ({ ...prev, status: 'cancelled' }));
           } catch (e: any) {
-            Alert.alert('Error', e?.message ?? 'Failed to cancel.');
+            toast.error(e?.message ?? 'Failed to cancel.');
           } finally {
             setUpdating(false);
           }
@@ -297,7 +300,7 @@ export default function RequestDetailScreen() {
           <Text style={s.headerTitle}>Request Detail</Text>
           <View style={{ width: 36 }} />
         </View>
-        <ActivityIndicator color="#5EEAD4" style={{ marginTop: 60 }} />
+        <ActivityIndicator color="#A49DF2" style={{ marginTop: 60 }} />
       </SafeAreaView>
     );
   }
@@ -335,10 +338,10 @@ export default function RequestDetailScreen() {
               </TouchableOpacity>
             </View>
             {loadingEmps ? (
-              <ActivityIndicator color="#0F766E" style={{ marginVertical: 40 }} />
+              <ActivityIndicator color="#554ADF" style={{ marginVertical: 40 }} />
             ) : employees.length === 0 ? (
               <View style={s.emptyPicker}>
-                <Icon name="person-outline" size={32} color="#99F6E4" />
+                <Icon name="person-outline" size={32} color="#BBB6F5" />
                 <Text style={s.emptyPickerText}>No employees found</Text>
               </View>
             ) : (
@@ -354,7 +357,7 @@ export default function RequestDetailScreen() {
                     activeOpacity={0.7}
                   >
                     <View style={s.pickerAvatar}>
-                      <Icon name="person" size={16} color="#0F766E" />
+                      <Icon name="person" size={16} color="#554ADF" />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={s.pickerName}>{emp.username}</Text>
@@ -430,7 +433,7 @@ export default function RequestDetailScreen() {
                       <Icon
                         name="receipt-outline"
                         size={14}
-                        color={completeIsBillable ? '#0F766E' : '#9CA3AF'}
+                        color={completeIsBillable ? '#554ADF' : '#9CA3AF'}
                       />
                     </View>
                     <View>
@@ -504,12 +507,12 @@ export default function RequestDetailScreen() {
                 { text: 'Cancel', style: 'cancel' },
                 {
                   text: 'Send',
-                  onPress: () => Alert.alert('Sent', `Notification sent for request #${requestId}.`),
+                  onPress: () => toast.success(`Notification sent for request #${requestId}.`),
                 },
               ])
             }
           >
-            <Icon name="notifications-outline" size={18} color="#5EEAD4" />
+            <Icon name="notifications-outline" size={18} color="#A49DF2" />
           </TouchableOpacity>
         </View>
 
@@ -522,8 +525,8 @@ export default function RequestDetailScreen() {
             </View>
           ) : (
             <View style={[s.chip, { backgroundColor: 'rgba(165,180,252,0.2)' }]}>
-              <Icon name={STEPS[curStep]?.icon ?? 'time-outline'} size={12} color="#5EEAD4" />
-              <Text style={[s.chipText, { color: '#5EEAD4' }]}>{STEPS[curStep]?.label ?? status}</Text>
+              <Icon name={STEPS[curStep]?.icon ?? 'time-outline'} size={12} color="#A49DF2" />
+              <Text style={[s.chipText, { color: '#A49DF2' }]}>{STEPS[curStep]?.label ?? status}</Text>
             </View>
           )}
           <View style={[s.chip, { backgroundColor: isUrgent ? 'rgba(220,38,38,0.2)' : 'rgba(255,255,255,0.12)' }]}>
@@ -655,7 +658,7 @@ export default function RequestDetailScreen() {
                 disabled={invoicing}
                 onPress={handleInvoiceNow}
               >
-                {invoicing ? <ActivityIndicator size="small" color="#0F766E" /> : <Icon name="receipt-outline" size={16} color="#0F766E" />}
+                {invoicing ? <ActivityIndicator size="small" color="#554ADF" /> : <Icon name="receipt-outline" size={16} color="#554ADF" />}
                 <Text style={s.invoiceNowText}>{'Invoice the tenant now · $' + Number(item.cost).toFixed(2)}</Text>
               </TouchableOpacity>
             ) : null}
@@ -666,8 +669,8 @@ export default function RequestDetailScreen() {
             <Text style={s.cardTitle}>Details</Text>
             <View style={s.detailGrid}>
               <View style={s.detailItem}>
-                <View style={[s.detailIcon, { backgroundColor: '#F0FDFA' }]}>
-                  <Icon name="home-outline" size={14} color="#0F766E" />
+                <View style={[s.detailIcon, { backgroundColor: '#F1F0FD' }]}>
+                  <Icon name="home-outline" size={14} color="#554ADF" />
                 </View>
                 <View>
                   <Text style={s.detailLabel}>Unit</Text>
@@ -753,7 +756,7 @@ export default function RequestDetailScreen() {
             {replies.length === 0 ? (
               <View style={s.emptyThread}>
                 <View style={s.emptyThreadIcon}>
-                  <Icon name="chatbubble-ellipses-outline" size={26} color="#99F6E4" />
+                  <Icon name="chatbubble-ellipses-outline" size={26} color="#BBB6F5" />
                 </View>
                 <Text style={s.emptyThreadText}>No messages yet</Text>
                 <Text style={s.emptyThreadSub}>Reply below to start the conversation.</Text>
@@ -811,9 +814,9 @@ export default function RequestDetailScreen() {
 const s = StyleSheet.create({
   invoiceNowBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 10,
-    paddingVertical: 12, borderRadius: 12, backgroundColor: '#F0FDFA', borderWidth: 1, borderColor: '#CCFBF1',
+    paddingVertical: 12, borderRadius: 12, backgroundColor: '#F1F0FD', borderWidth: 1, borderColor: '#DEDBFA',
   },
-  invoiceNowText: { fontSize: 14, fontWeight: '700', color: '#0F766E' },
+  invoiceNowText: { fontSize: 14, fontWeight: '700', color: '#554ADF' },
   container: { flex: 1, backgroundColor: '#F4F6F8' },
   scroll: { flex: 1 },
   content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32, gap: 14 },
@@ -839,7 +842,7 @@ const s = StyleSheet.create({
     width: 140,
     height: 140,
     borderRadius: 70,
-    backgroundColor: 'rgba(15,118,110,0.2)',
+    backgroundColor: 'rgba(85,74,223,0.2)',
     bottom: -40,
     left: -40,
   },
@@ -995,7 +998,7 @@ const s = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 16,
-    backgroundColor: '#F0FDFA',
+    backgroundColor: '#F1F0FD',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
@@ -1017,7 +1020,7 @@ const s = StyleSheet.create({
     marginBottom: 4,
   },
   bubbleBody: { maxWidth: '75%', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
-  bubbleBodyOwner: { backgroundColor: '#0F766E', borderBottomRightRadius: 4 },
+  bubbleBodyOwner: { backgroundColor: '#554ADF', borderBottomRightRadius: 4 },
   bubbleBodyTenant: { backgroundColor: '#F3F4F6', borderBottomLeftRadius: 4 },
   bubbleText: { fontSize: 14, color: '#374151', lineHeight: 20 },
   bubbleTextOwner: { color: '#FFFFFF' },
@@ -1049,12 +1052,12 @@ const s = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: '#0F766E',
+    backgroundColor: '#554ADF',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
-  sendBtnDisabled: { backgroundColor: '#99F6E4' },
+  sendBtnDisabled: { backgroundColor: '#BBB6F5' },
 
   // Modal
   modalOverlay: {
@@ -1106,7 +1109,7 @@ const s = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#F0FDFA',
+    backgroundColor: '#F1F0FD',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1150,7 +1153,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  billableIconActive: { backgroundColor: '#F0FDFA' },
+  billableIconActive: { backgroundColor: '#F1F0FD' },
   billableTitle: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
   billableSub:   { fontSize: 11, color: '#9CA3AF', marginTop: 1 },
   toggle: {
@@ -1162,7 +1165,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     flexShrink: 0,
   },
-  toggleActive: { backgroundColor: '#0F766E' },
+  toggleActive: { backgroundColor: '#554ADF' },
   toggleThumb: {
     width: 20,
     height: 20,

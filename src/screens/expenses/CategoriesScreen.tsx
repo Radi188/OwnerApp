@@ -12,6 +12,7 @@ import { useAuth } from '../../context/AuthContext';
 import { categoriesApi, pickList } from '../../services/api';
 import { colors, radius, spacing } from '../../theme';
 import { capitalize, errMsg } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 type TxType = 'expense' | 'income';
 
@@ -39,7 +40,7 @@ export default function CategoriesScreen() {
       setEditing(null);
       await reload();
     } catch (e) {
-      Alert.alert(t('common.error'), errMsg(e));
+      toast.error(errMsg(e));
     } finally {
       setSaving(false);
     }
@@ -49,7 +50,7 @@ export default function CategoriesScreen() {
     { text: t('common.cancel'), style: 'cancel' },
     {
       text: t('unitDetail.delete'), style: 'destructive',
-      onPress: async () => { try { await categoriesApi.remove(c.id); await reload(); } catch (e) { Alert.alert(t('common.error'), errMsg(e)); } },
+      onPress: async () => { try { await categoriesApi.remove(c.id); toast.deleted(); await reload(); } catch (e) { toast.error(errMsg(e)); } },
     },
   ]);
 

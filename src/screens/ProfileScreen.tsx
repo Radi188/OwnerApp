@@ -7,13 +7,22 @@ import {
   Switch,
   Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { Text } from '../components/Text';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import i18n from 'i18next';
-import { usersApi, authApi } from '../services/api';
+import { usersApi, authApi, setTokens } from '../services/api';
+import {
+  biometricLabel, clearBiometricCredentials, getAvailableBiometricType, getBiometricState,
+  promptBiometrics, saveBiometricCredentials, type BiometricType,
+} from '../services/biometrics';
+import { Sheet } from '../components/Sheet';
+import { Input } from '../components/form';
+import { Button } from '../components/ui';
+import { toast } from '../components/Toast';
 import { useAuth } from '../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 import { BackButton } from '../components/ui';
@@ -49,7 +58,71 @@ export default function ProfileScreen() {
   const [pushAll, setPushAll]       = useState(true);
   const [pushRequests, setPushRequests] = useState(true);
   const [pushPayments, setPushPayments] = useState(true);
+  // Biometric sign-in (this device only — the password is kept in the Keychain / Keystore)
+  const [bioType, setBioType]       = useState<BiometricType>(null);
   const [biometric, setBiometric]   = useState(false);
+  const [bioSheet, setBioSheet]     = useState(false);
+  const [bioPwd, setBioPwd]         = useState('');
+  const [bioErr, setBioErr]         = useState('');
+  const [bioBusy, setBioBusy]       = useState(false);
+  const bioName = biometricLabel(bioType);
+
+  useEffect(() => {
+    Promise.all([getAvailableBiometricType(), getBiometricState()]).then(([type, state]) => {
+      setBioType(type);
+      setBiometric(!!type && state.enabled && state.username === auth.user?.username);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onBiometricToggle = (on: boolean) => {
+    if (on) {
+      if (!bioType) { toast.warning(t('bio.notAvailable')); return; }
+      setBioPwd(''); setBioErr(''); setBioSheet(true);
+      return;
+    }
+    Alert.alert(t('bio.offTitle', { type: bioName }), t('bio.offMsg'), [
+      { text: t('profile.cancel'), style: 'cancel' },
+      {
+        text: t('bio.turnOff'), style: 'destructive',
+        onPress: async () => {
+          await clearBiometricCredentials();
+          setBiometric(false);
+          toast.success(t('bio.offDone', { type: bioName }));
+        },
+      },
+    ]);
+  };
+
+  /** Check the password with the server, confirm the face / finger, then save it securely. */
+  const confirmBiometric = async () => {
+    const uname = auth.user?.username;
+    if (!uname || !bioPwd) { setBioErr(t('bio.wrongPassword')); return; }
+    setBioBusy(true); setBioErr('');
+    try {
+      let res: any;
+      try {
+        res = await authApi.login(uname, bioPwd, auth.propertyId ?? undefined);
+      } catch (e: any) {
+        setBioErr(e?.status === 401 || e?.status === 400 ? t('bio.wrongPassword') : e?.message ?? t('bio.saveFailed'));
+        return;
+      }
+      // Logging in again issues new tokens — keep this session on them
+      const access = res?.accessToken ?? res?.data?.accessToken;
+      const refresh = res?.refreshToken ?? res?.data?.refreshToken;
+      if (access && refresh) setTokens(access, refresh);
+
+      if (Platform.OS === 'ios' && !(await promptBiometrics(t('bio.confirmTitle', { type: bioName })))) return;
+      await saveBiometricCredentials(uname, bioPwd, auth.propertyId ?? undefined, auth.propertyName ?? undefined);
+      setBiometric(true);
+      setBioSheet(false);
+      toast.success(t('bio.enabledMsg', { type: bioName }), { title: t('bio.enabledTitle', { type: bioName }) });
+    } catch (e: any) {
+      setBioErr(e?.message ?? t('bio.saveFailed'));
+    } finally {
+      setBioBusy(false);
+    }
+  };
 
   const currentLang = i18n.language;
   const langLabel   = currentLang === 'en' ? 'English 🇺🇸' : 'ភាសាខ្មែរ 🇰🇭';
@@ -64,9 +137,6 @@ export default function ProfileScreen() {
         // Sync notification preference
         if (user.settings?.notify !== undefined) {
           setPushAll(user.settings.notify);
-        }
-        if (user.isBiometrics !== undefined) {
-          setBiometric(user.isBiometrics);
         }
       }
     } finally {
@@ -104,7 +174,7 @@ export default function ProfileScreen() {
     {
       title: t('profile.account'),
       items: [
-        { id: 'username', icon: 'person-outline', iconBg: '#F0FDFA', iconColor: '#0F766E', label: 'Username', value: username },
+        { id: 'username', icon: 'person-outline', iconBg: '#F1F0FD', iconColor: '#554ADF', label: 'Username', value: username },
         { id: 'role',     icon: 'shield-outline', iconBg: '#F5F3FF', iconColor: '#7C3AED', label: 'Role',     value: roleName ? String(roleName) : '—' },
         { id: 'password', icon: 'key-outline',    iconBg: '#FFF7ED', iconColor: '#EA580C', label: t('profile.changePassword') },
       ],
@@ -112,7 +182,7 @@ export default function ProfileScreen() {
     {
       title: t('profile.pushNotifications'),
       items: [
-        { id: 'push_all',      icon: 'notifications-outline', iconBg: '#F0FDFA', iconColor: '#0F766E', label: t('profile.allNotifications'), toggle: true },
+        { id: 'push_all',      icon: 'notifications-outline', iconBg: '#F1F0FD', iconColor: '#554ADF', label: t('profile.allNotifications'), toggle: true },
         { id: 'push_requests', icon: 'construct-outline',     iconBg: '#FEF9C3', iconColor: '#CA8A04', label: t('profile.newRequests'),       toggle: true },
         { id: 'push_payments', icon: 'cash-outline',          iconBg: '#F0FDF4', iconColor: '#16A34A', label: t('profile.paymentUpdates'),    toggle: true },
       ],
@@ -120,9 +190,9 @@ export default function ProfileScreen() {
     {
       title: t('profile.security'),
       items: [
-        { id: 'biometric', icon: 'finger-print-outline', iconBg: '#F5F3FF', iconColor: '#7C3AED', label: t('profile.biometricLogin'),  toggle: true },
-        { id: 'language',  icon: 'language-outline',     iconBg: '#F0FDFA', iconColor: '#0F766E', label: t('profile.language'),         value: langLabel },
-        { id: 'privacy',   icon: 'shield-outline',       iconBg: '#F0FDFA', iconColor: '#0F766E', label: t('profile.privacyPolicy') },
+        { id: 'biometric', icon: 'finger-print-outline', iconBg: '#F5F3FF', iconColor: '#7C3AED', label: bioType ? t('bio.toggleLabel', { type: bioName }) : t('profile.biometricLogin'),  toggle: true },
+        { id: 'language',  icon: 'language-outline',     iconBg: '#F1F0FD', iconColor: '#554ADF', label: t('profile.language'),         value: langLabel },
+        { id: 'privacy',   icon: 'shield-outline',       iconBg: '#F1F0FD', iconColor: '#554ADF', label: t('profile.privacyPolicy') },
         { id: 'terms',     icon: 'document-outline',     iconBg: '#F3F4F6', iconColor: '#374151', label: t('profile.termsOfService') },
       ],
     },
@@ -138,7 +208,7 @@ export default function ProfileScreen() {
     push_all:      [pushAll,      setPushAll],
     push_requests: [pushRequests, setPushRequests],
     push_payments: [pushPayments, setPushPayments],
-    biometric:     [biometric,    setBiometric],
+    biometric:     [biometric,    onBiometricToggle],
   };
 
   const handlePress = (id: string) => {
@@ -163,7 +233,7 @@ export default function ProfileScreen() {
       </View>
 
       {loading ? (
-        <ActivityIndicator color="#0F766E" style={{ marginTop: 40 }} />
+        <ActivityIndicator color="#554ADF" style={{ marginTop: 40 }} />
       ) : (
         <ScrollView
           style={s.scroll}
@@ -178,7 +248,7 @@ export default function ProfileScreen() {
             <Text style={s.name}>{username}</Text>
             {roleName && <Text style={s.email}>{roleName}</Text>}
             <View style={s.ownerPill}>
-              <Icon name="person-outline" size={13} color="#0F766E" />
+              <Icon name="person-outline" size={13} color="#554ADF" />
               <Text style={s.ownerPillText}>{t('profile.ownerLabel')}</Text>
             </View>
           </View>
@@ -207,8 +277,8 @@ export default function ProfileScreen() {
                           <Switch
                             value={toggleEntry?.[0]}
                             onValueChange={toggleEntry?.[1]}
-                            trackColor={{ false: '#E5E7EB', true: '#5EEAD4' }}
-                            thumbColor={toggleEntry?.[0] ? '#0F766E' : '#9CA3AF'}
+                            trackColor={{ false: '#E5E7EB', true: '#A49DF2' }}
+                            thumbColor={toggleEntry?.[0] ? '#554ADF' : '#9CA3AF'}
                           />
                         ) : item.value ? (
                           <Text style={s.rowValue}>{item.value}</Text>
@@ -226,6 +296,27 @@ export default function ProfileScreen() {
           <Text style={s.footer}>{t('profile.appFooter')}</Text>
         </ScrollView>
       )}
+
+      {/* Turn on Face ID / fingerprint: confirm the password first */}
+      <Sheet
+        visible={bioSheet}
+        onClose={() => setBioSheet(false)}
+        title={t('bio.confirmTitle', { type: bioName })}
+        footer={<Button title={t('bio.enable')} icon={bioType === 'FaceID' ? 'scan-outline' : 'finger-print-outline'} onPress={confirmBiometric} loading={bioBusy} />}
+      >
+        <Text style={s.bioSheetText}>{t('bio.confirmMsg', { type: bioName, name: auth.user?.username ?? '' })}</Text>
+        <Input
+          label={t('bio.password')}
+          value={bioPwd}
+          onChangeText={v => { setBioPwd(v); setBioErr(''); }}
+          secureTextEntry
+          autoFocus
+          autoCapitalize="none"
+          error={bioErr || undefined}
+          onSubmitEditing={confirmBiometric}
+          returnKeyType="done"
+        />
+      </Sheet>
     </SafeAreaView>
   );
 }
@@ -244,6 +335,7 @@ const hdr = StyleSheet.create({
 });
 
 const s = StyleSheet.create({
+  bioSheetText: { fontSize: 14, color: '#475569', lineHeight: 20, marginBottom: 14 },
   container: { flex: 1, backgroundColor: '#F8FAFC' },
   scroll: { flex: 1 },
   content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
@@ -255,7 +347,7 @@ const s = StyleSheet.create({
     shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
   },
   avatarCircle: {
-    width: 72, height: 72, borderRadius: 36, backgroundColor: '#0F766E',
+    width: 72, height: 72, borderRadius: 36, backgroundColor: '#554ADF',
     alignItems: 'center', justifyContent: 'center', marginBottom: 12,
   },
   avatarText: { fontSize: 26, fontWeight: '700', color: '#FFFFFF' },
@@ -263,9 +355,9 @@ const s = StyleSheet.create({
   email: { fontSize: 13, color: '#9CA3AF', marginBottom: 14 },
   ownerPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: '#F0FDFA', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7,
+    backgroundColor: '#F1F0FD', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7,
   },
-  ownerPillText: { fontSize: 13, color: '#0F766E', fontWeight: '600' },
+  ownerPillText: { fontSize: 13, color: '#554ADF', fontWeight: '600' },
 
   section: { marginBottom: 16 },
   sectionTitle: { fontSize: 12, fontWeight: '600', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8, paddingLeft: 4 },

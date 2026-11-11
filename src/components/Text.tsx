@@ -40,8 +40,16 @@ const FAMILY: Record<string, string> = {
 
 /** Khmer + Khmer Symbols blocks */
 const KHMER = /[ក-៿᧠-᧿]/;
-/** Line height Khmer needs so stacked vowels/subscripts are not clipped. */
-const LINE_RATIO = 1.5;
+/**
+ * Line height Khmer needs so stacked vowels/subscripts are not clipped.
+ * Measured with Kantumruy Pro (HarfBuzz): marks above reach 1.03 em (e.g. ប៊ឺ in Bold) and coeng
+ * subscripts go down to −0.46 em (e.g. ខ្ញុំ). React Native centres glyphs in the line box, so with
+ * the font's 0.92 / 0.26 em ascent/descent a 1.6 ratio leaves room for both (1.13 em / 0.47 em).
+ * NOTE: this only holds while Kantumruy Pro is actually linked (Info.plist UIAppFonts + Xcode
+ * resources on iOS, android/app/src/main/assets/fonts on Android). The system Khmer fallback font
+ * is taller, and React Native stops centring when lineHeight < the font's own line height.
+ */
+const LINE_RATIO = 1.6;
 
 // ── Language subscription (one tiny listener set, no per-Text i18n binding) ──
 const listeners = new Set<() => void>();
@@ -90,7 +98,9 @@ export const Text = forwardRef<RNText, TextProps>(function Text(props, ref) {
   const lang = useLanguage();
   const nested = useContext(InsideText);
   const active = lang === 'km' || hasKhmer(props.children);
-  const patch = active ? khmerPatch(props.style, { lineHeight: !nested }) : null;
+  // No fixed lineHeight on shrink-to-fit text: iOS scales only the font, so a fixed line height
+  // can make every size "not fit" and React Native drops to its 4pt minimum (tiny "A03" codes).
+  const patch = active ? khmerPatch(props.style, { lineHeight: !nested && !props.adjustsFontSizeToFit }) : null;
 
   const el = <RNText ref={ref} {...props} style={patch ? [props.style, patch] : props.style} />;
   return nested ? el : <InsideText.Provider value>{el}</InsideText.Provider>;

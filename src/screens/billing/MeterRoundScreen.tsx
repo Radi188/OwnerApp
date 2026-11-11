@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput as RNTextInput, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, TextInput as RNTextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -13,6 +13,7 @@ import { num, pickList, unitsApi, utilityApi } from '../../services/api';
 import { activeContract } from '../units/UnitsScreen';
 import { colors, radius, spacing, toneColors } from '../../theme';
 import { errMsg, money, thisMonthYM, todayYMD } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 /**
  * Meter round (FRONTEND_GUIDE §11): walk the building and enter both meters room by room.
@@ -95,7 +96,7 @@ export default function MeterRoundScreen() {
       setDone(prev => new Set(prev).add(unit.id));
       next();
     } catch (e) {
-      Alert.alert(t('common.error'), errMsg(e));
+      toast.error(errMsg(e));
     } finally {
       setSaving(false);
     }

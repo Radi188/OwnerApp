@@ -12,6 +12,7 @@ import { categoriesApi, num, pickList, transactionsApi, unitsApi } from '../../s
 import type { TransactionInput } from '../../services/api';
 import { colors, spacing } from '../../theme';
 import { capitalize, errMsg, todayYMD } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 type TxType = 'expense' | 'income';
 type Scope = 'property' | 'room';
@@ -77,12 +78,12 @@ export default function TransactionFormScreen() {
       if (again) {
         setAmount(''); setDescription(''); setVendor(''); setNote(''); setErrors({});
         if (newCategory) { setNewCategory(null); cats.reload(); }
-        Alert.alert(t('expenses.saved'));
+        toast.success(t('expenses.saved'));
       } else {
         nav.goBack();
       }
     } catch (e) {
-      Alert.alert(t('common.error'), errMsg(e));
+      toast.error(errMsg(e));
     } finally {
       setSaving(false);
     }
@@ -92,7 +93,7 @@ export default function TransactionFormScreen() {
     { text: t('common.cancel'), style: 'cancel' },
     {
       text: t('unitDetail.delete'), style: 'destructive',
-      onPress: async () => { try { await transactionsApi.remove(tx.id); nav.goBack(); } catch (e) { Alert.alert(t('common.error'), errMsg(e)); } },
+      onPress: async () => { try { await transactionsApi.remove(tx.id); toast.deleted(); nav.goBack(); } catch (e) { toast.error(errMsg(e)); } },
     },
   ]);
 

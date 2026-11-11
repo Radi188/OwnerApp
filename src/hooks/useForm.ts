@@ -1,6 +1,14 @@
 import { useCallback, useState } from 'react';
-import { Alert } from 'react-native';
+import i18n from '../i18n';
+import { toast } from '../components/Toast';
 import { errMsg } from '../utils/format';
+
+export type SubmitOptions = {
+  /** Success toast text. Default "Saved successfully"; `false` = no toast (the screen shows its own). */
+  success?: string | false;
+  /** Title of the error toast. Default "Could not save". */
+  errorTitle?: string;
+};
 
 type Rules<T> = Partial<Record<keyof T, (v: any, all: T) => string | null | undefined>>;
 
@@ -31,15 +39,18 @@ export function useForm<T extends Record<string, any>>(initial: T, rules: Rules<
     return Object.keys(next).length === 0;
   };
 
-  const submit = (fn: (v: T) => Promise<unknown>, onDone?: () => void) => async () => {
+  const submit = (fn: (v: T) => Promise<unknown>, onDone?: () => void, opts: SubmitOptions = {}) => async () => {
     if (submitting) return;
     if (!validate()) return;
     setSubmitting(true);
     try {
       await fn(values);
+      if (opts.success !== false) toast.success(opts.success ?? i18n.t('toast.saved'));
       onDone?.();
     } catch (e) {
-      Alert.alert('Could not save', errMsg(e));
+      // `silent` errors were already shown on the screen (e.g. an inline duplicate-phone card)
+      if ((e as any)?.silent) return;
+      toast.error(errMsg(e, i18n.t('toast.failed')), { title: opts.errorTitle ?? i18n.t('toast.couldNotSave') });
     } finally {
       setSubmitting(false);
     }

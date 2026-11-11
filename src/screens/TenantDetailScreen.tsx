@@ -17,12 +17,14 @@ import { useAuth } from '../context/AuthContext';
 import { confirmAction, LoadingView, ProgressBar, Screen } from '../components/ui';
 import Segments from '../components/Segments';
 import TenantCredentialsSheet from '../components/TenantCredentialsSheet';
+import { TelegramInviteSheet } from '../components/TelegramLink';
 import type { TenantCredentials } from '../services/types';
 import { dayLabel, monthLabel, statusLabel } from '../i18n';
 import { maintenanceApi, pickList, tenantsApi, utilityApi } from '../services/api';
 import { currentMonthKey, getInvoice, hydrateInvoices, monthKey } from '../store/invoiceStore';
 import { colors, radius, spacing, statusTone, toneColors } from '../theme';
 import { daysUntil, initials, money, riel, thisMonthYM, timeAgo, toNum } from '../utils/format';
+import { toast } from '../components/Toast';
 
 type Section = 'overview' | 'invoices' | 'requests';
 type InvoiceRange = 'last_month' | '3_months' | '6_months' | '1_year';
@@ -53,6 +55,7 @@ export default function TenantDetailScreen() {
   const { can } = useAuth();
 
   const [tenant, setTenant] = useState<any>(null);
+  const [tgInvite, setTgInvite] = useState(false);
   const [maintenance, setMaintenance] = useState<any[]>([]);
   const [invoices, setInvoices] = useState<any[]>([]);
   const [range, setRange] = useState<InvoiceRange>('3_months');
@@ -154,12 +157,12 @@ export default function TenantDetailScreen() {
   // ── Actions ────────────────────────────────────────────────────────────────
   const call = (phone?: string) => {
     if (!phone) return;
-    Linking.openURL(`tel:${phone}`).catch(() => Alert.alert(t('tenantDetail.error'), t('tenantDetail.unableToCall')));
+    Linking.openURL(`tel:${phone}`).catch(() => toast.error(t('tenantDetail.unableToCall')));
   };
 
   const notify = () => {
     if (!tenant.userId) {
-      Alert.alert(t('tenantView.noAccountTitle'), t('tenantView.noAccountMsg', { name: tenant.name }));
+      toast.info(t('tenantView.noAccountMsg', { name: tenant.name }), { title: t('tenantView.noAccountTitle') });
       return;
     }
     nav.navigate('SendNotification', { userId: tenant.userId, name: tenant.name });
@@ -172,7 +175,7 @@ export default function TenantDetailScreen() {
       return;
     }
     if (!unitId || !contract) {
-      Alert.alert(t('tenantView.noContractTitle'), t('tenantView.noContractMsg'));
+      toast.info(t('tenantView.noContractMsg'), { title: t('tenantView.noContractTitle') });
       return;
     }
     setOpening(true);
@@ -194,7 +197,7 @@ export default function TenantDetailScreen() {
         } : null,
       });
     } catch {
-      Alert.alert(t('tenantDetail.error'), t('tenantView.readingsFailed'));
+      toast.error(t('tenantView.readingsFailed'));
     } finally {
       setOpening(false);
     }
@@ -211,7 +214,7 @@ export default function TenantDetailScreen() {
           const c = await tenantsApi.regenerateLogin(tenant.id);
           if (c) setNewLogin(c);
         } catch (e: any) {
-          Alert.alert(t('tenantDetail.error'), e?.message ?? t('home.tryAgain'));
+          toast.error(e?.message ?? t('home.tryAgain'));
         }
       },
     },
@@ -222,10 +225,10 @@ export default function TenantDetailScreen() {
     t('tenantView.deleteConfirm', { name: tenant.name }),
     async () => {
       try {
-        await tenantsApi.remove(tenant.id);
+        await tenantsApi.remove(tenant.id); toast.deleted();
         nav.goBack();
       } catch (e: any) {
-        Alert.alert(t('unitDetail.deleteFailed'), e?.message ?? t('home.tryAgain'));
+        toast.error(e?.message ?? t('home.tryAgain'), { title: t('unitDetail.deleteFailed') });
       }
     },
     t('unitDetail.delete'),
@@ -246,8 +249,9 @@ export default function TenantDetailScreen() {
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={styles.name} numberOfLines={1}>{tenant.name}</Text>
             <View style={styles.metaRow}>
-              <View style={[styles.dot, { backgroundColor: active ? colors.success : colors.danger }]} />
-              <Text style={[styles.metaStrong, { color: active ? colors.success : colors.danger }]}>
+              {/* Moved out is a normal end state — grey, not red (FRONTEND_GUIDE §22) */}
+              <View style={[styles.dot, { backgroundColor: active ? colors.success : colors.muted }]} />
+              <Text style={[styles.metaStrong, { color: active ? colors.success : colors.textSecondary }]}>
                 {statusLabel(tenant.status)}
               </Text>
               {tenant.user?.username ? <Text style={styles.meta} numberOfLines={1}>· @{tenant.user.username}</Text> : null}
@@ -270,6 +274,12 @@ export default function TenantDetailScreen() {
             onPress={() => contract && nav.navigate('ContractDetail', { contractId: contract.id })}
             disabled={!contract}
           />
+          {can('edit', 'tenant') ? (
+            <Action icon="paper-plane-outline" label={t('tgLink.button')} onPress={() => setTgInvite(true)} />
+          ) : null}
+          {contract && isActiveStatus(contract.status) && unitId && can('edit', 'contract') ? (
+            <Action icon="exit-outline" label={t('tenantView.moveOut')} onPress={() => nav.navigate('MoveOut', { unitId })} />
+          ) : null}
         </View>
       </View>
 
@@ -520,6 +530,7 @@ export default function TenantDetailScreen() {
           </View>
         </>
       ) : null}
+      <TelegramInviteSheet visible={tgInvite} tenant={tenant ? { id: tenant.id, name: tenant.name } : null} onClose={() => setTgInvite(false)} />
       <TenantCredentialsSheet
         visible={!!newLogin}
         name={tenant.name}

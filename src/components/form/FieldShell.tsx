@@ -34,7 +34,7 @@ export type FieldShellProps = {
 /**
  * The one field look used by every input in the app:
  * a white rounded box whose label sits inside like a placeholder and floats up
- * (smaller, teal) when the field is focused or filled. Red when invalid.
+ * (smaller, brand indigo) when the field is focused or filled. Red when invalid.
  */
 export function FieldShell({
   label, required, error, hint, counter, focused, filled, multiline, disabled, icon, right, onPress, style, children,
@@ -115,7 +115,7 @@ const styles = StyleSheet.create({
   boxMultiline: { alignItems: 'flex-start', minHeight: 116 },
   boxFocused: {
     borderColor: colors.primary,
-    // soft teal glow (iOS); Android keeps the border only
+    // soft indigo glow (iOS); Android keeps the border only
     shadowColor: colors.primary, shadowOpacity: 0.16, shadowRadius: 8, shadowOffset: { width: 0, height: 0 },
   },
   boxError: { borderColor: colors.danger, backgroundColor: '#FFFBFB' },

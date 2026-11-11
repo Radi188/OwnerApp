@@ -1,0 +1,35 @@
+{
+  "brand": "Pteah Manager",
+  "tagline": "Rental management, made at home",
+  "brief": "A rental management system for Cambodian landlords and property managers. Pteah means house in Khmer. The mark should feel Khmer without being ornate, light and modern enough for an app, and trustworthy.",
+  "adjectives": ["Khmer", "modern", "light", "trustworthy"],
+  "criteria": "Success: clearly Khmer (not Chinese or Japanese), not a clip-art house, works as an app icon and at 16 px, one colour #554ADF.",
+  "mockups": ["app-icon", "website", "favicon-tab", "business-card", "signage", "social"],
+  "nav": ["Properties", "Tenants", "Payments"],
+  "brand_color": "#554ADF",
+  "greyscale": false,
+  "designer": "Pteah Manager",
+  "round": 2,
+  "concepts": [
+    {
+      "name": "Sunray Gable",
+      "symbol": "pteah-symbol.svg",
+      "lockup": "pteah-horizontal.svg",
+      "symbol_on_tile": "symbol/pteah-symbol-white.svg",
+      "lockup_on_dark": "lockups/pteah-horizontal-white.svg",
+      "idea": "The gable of a Khmer house drawn with light: sunray boards, a chovea finial and naga hooks at the eaves.",
+      "rationale": [
+        "The sunray gable is a detail of traditional Khmer wooden houses",
+        "Steep 60° roof, chovea and naga hooks keep it Khmer, not Chinese",
+        "No walls or door: a gable, not a clip-art house",
+        "Simplified 4-ray cut for favicons and very small sizes"
+      ]
+    }
+  ],
+  "recommendation": "Sunray Gable in #554ADF with Montserrat SemiBold lettering. Use the full symbol from 32 px up and the small cut below that.",
+  "next_steps": [
+    "Check the files on your real app and website",
+    "Run a trademark search before launch",
+    "Extend into UI icons and a gable pattern if needed"
+  ]
+}

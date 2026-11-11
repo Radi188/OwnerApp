@@ -6,7 +6,8 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { BadgeProvider, useBadges } from './src/context/BadgeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import QuickLoginModal from './src/components/QuickLoginModal';
-import { navigate } from './src/navigation/navigationRef';
+import { ToastHost } from './src/components/Toast';
+import { navigate, openNotificationTarget } from './src/navigation/navigationRef';
 import {
   requestNotificationPermission,
   getFCMToken,
@@ -45,8 +46,9 @@ function PushNotificationSetup() {
 
   // Notification tap while app is in background
   useEffect(() => {
-    const unsubscribe = onNotificationOpenedApp(_message => {
-      navigate('Notifications');
+    const unsubscribe = onNotificationOpenedApp(message => {
+      // A pending tenant payment opens the payment so it can be verified
+      if (!openNotificationTarget(message?.data?.type as string, message?.data)) navigate('Notifications');
     });
     return unsubscribe;
   }, []);
@@ -54,7 +56,7 @@ function PushNotificationSetup() {
   // Notification tap when app was fully quit (killed state)
   useEffect(() => {
     getInitialNotification().then(message => {
-      if (message) {
+      if (message && !openNotificationTarget(message.data?.type as string, message.data)) {
         navigate('Notifications');
       }
     });
@@ -73,6 +75,7 @@ export default function App() {
             <AppNavigator />
             <QuickLoginModal />
             <PushNotificationSetup />
+            <ToastHost />
           </View>
         </BadgeProvider>
       </AuthProvider>

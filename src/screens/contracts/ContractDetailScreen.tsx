@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { Text } from '../../components/Text';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { contractsApi, pickOne } from '../../services/api';
@@ -11,6 +11,7 @@ import {
 } from '../../components/ui';
 import { colors, font, spacing } from '../../theme';
 import { capitalize, daysUntil, errMsg, fmtDate, money } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 export default function ContractDetailScreen() {
   const nav = useNavigation<any>();
@@ -23,7 +24,7 @@ export default function ContractDetailScreen() {
   );
 
   const onDelete = () => confirmAction('Delete contract', 'Delete this contract? Invoices linked to it may be affected.', async () => {
-    try { await contractsApi.remove(contractId); nav.goBack(); } catch (e) { Alert.alert('Delete failed', errMsg(e)); }
+    try { await contractsApi.remove(contractId); toast.deleted(); nav.goBack(); } catch (e) { toast.error(errMsg(e), { title: 'Delete failed' }); }
   });
 
   const start = c ? new Date(c.startDate).getTime() : 0;

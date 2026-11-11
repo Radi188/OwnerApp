@@ -7,6 +7,7 @@ import {
   setActiveProperty,
   authApi,
 } from '../services/api';
+import { updateBiometricProperty } from '../services/biometrics';
 
 const KEY_PROPERTY_ID   = '@owner:propertyId';
 const KEY_PROPERTY_NAME = '@owner:propertyName';
@@ -161,6 +162,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPropertyName(name);
     AsyncStorage.setItem(KEY_PROPERTY_ID,   String(id)).catch(() => {});
     AsyncStorage.setItem(KEY_PROPERTY_NAME, name).catch(() => {});
+    // Next Face ID / fingerprint sign-in opens the property the user switched to
+    updateBiometricProperty(id, name).catch(() => {});
   }, []);
 
   const can = useCallback((action: PermAction, module: string) => {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -17,6 +17,7 @@ import {
 import type { BillingStrategy } from '../../services/types';
 import { colors, radius, spacing } from '../../theme';
 import { errMsg, money, todayYMD } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 /**
  * Move a tenant into a room (FRONTEND_GUIDE §9). Everything is pre-filled from the room
@@ -150,7 +151,7 @@ export default function MoveInScreen() {
           visible={paySheet}
           invoice={fi ? { ...fi, remainingAmount: fi.remainingAmount ?? fi.totalAmount, pendingAmount: fi.pendingAmount ?? 0, tenant: { name: tenantName } } : null}
           onClose={() => setPaySheet(false)}
-          onSaved={() => { setPaySheet(false); Alert.alert(t('moveIn.paymentSaved')); }}
+          onSaved={() => { setPaySheet(false); toast.success(t('moveIn.paymentSaved')); }}
         />
       </Screen>
     );

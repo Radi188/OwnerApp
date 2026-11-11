@@ -42,7 +42,7 @@ const STATUS_META: Record<string, { label: string; color: string; bg: string; ic
 
 const PRIORITY_META: Record<string, { color: string; bg: string; dot: string }> = {
   low:    { color: '#16A34A', bg: '#DCFCE7', dot: '#16A34A' },
-  medium: { color: '#0F766E', bg: '#F0FDFA', dot: '#0F766E' },
+  medium: { color: '#554ADF', bg: '#F1F0FD', dot: '#554ADF' },
   high:   { color: '#EA580C', bg: '#FFF7ED', dot: '#EA580C' },
   urgent: { color: '#DC2626', bg: '#FEF2F2', dot: '#DC2626' },
 };
@@ -53,7 +53,7 @@ const TYPE_META: Record<string, { icon: string; bg: string; color: string }> = {
   structural: { icon: 'construct-outline',     bg: '#FEE2E2', color: '#DC2626' },
   appliance:  { icon: 'hardware-chip-outline', bg: '#DCFCE7', color: '#16A34A' },
   cleaning:   { icon: 'brush-outline',         bg: '#F5F3FF', color: '#7C3AED' },
-  other:      { icon: 'build-outline',         bg: '#F0FDFA', color: '#0F766E' },
+  other:      { icon: 'build-outline',         bg: '#F1F0FD', color: '#554ADF' },
 };
 
 const TABS: { key: 'all' | MaintenanceStatus; label: string }[] = [
@@ -141,15 +141,15 @@ export default function RequestsScreen() {
             return (
               <TouchableOpacity
                 key={tab.key}
-                style={[s.tab, active && { backgroundColor: sm?.color ?? '#0F766E' }]}
+                style={[s.tab, active && { backgroundColor: sm?.color ?? '#554ADF' }]}
                 activeOpacity={0.75}
                 onPress={() => setActiveTab(tab.key)}
               >
                 {sm && <Icon name={sm.icon} size={12} color={active ? '#FFF' : sm.color} />}
                 <Text style={[s.tabText, active && s.tabTextActive]}>{tab.label}</Text>
                 {count > 0 && (
-                  <View style={[s.tabCount, active ? s.tabCountActive : { backgroundColor: sm?.bg ?? '#F0FDFA' }]}>
-                    <Text style={[s.tabCountText, { color: active ? (sm?.color ?? '#0F766E') : (sm?.color ?? '#0F766E') }]}>
+                  <View style={[s.tabCount, active ? s.tabCountActive : { backgroundColor: sm?.bg ?? '#F1F0FD' }]}>
+                    <Text style={[s.tabCountText, { color: active ? (sm?.color ?? '#554ADF') : (sm?.color ?? '#554ADF') }]}>
                       {count}
                     </Text>
                   </View>
@@ -162,20 +162,20 @@ export default function RequestsScreen() {
 
       {/* ── List ── */}
       {loading ? (
-        <ActivityIndicator color="#0F766E" style={{ marginTop: 60 }} />
+        <ActivityIndicator color="#554ADF" style={{ marginTop: 60 }} />
       ) : (
         <ScrollView
           style={s.scroll}
           contentContainerStyle={s.content}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#0F766E']} tintColor="#0F766E" />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#554ADF']} tintColor="#554ADF" />
           }
         >
           {filtered.length === 0 ? (
             <View style={s.emptyCard}>
               <View style={s.emptyIconWrap}>
-                <Icon name="construct-outline" size={28} color="#99F6E4" />
+                <Icon name="construct-outline" size={28} color="#BBB6F5" />
               </View>
               <Text style={s.emptyTitle}>No requests found</Text>
               <Text style={s.emptySub}>
@@ -211,7 +211,7 @@ export default function RequestsScreen() {
                           <View style={s.cardMetaRow}>
                             {req.unit && (
                               <View style={s.unitChip}>
-                                <Icon name="home-outline" size={10} color="#0F766E" />
+                                <Icon name="home-outline" size={10} color="#554ADF" />
                                 <Text style={s.unitChipText}>Unit {req.unit.unitCode}</Text>
                               </View>
                             )}
@@ -298,8 +298,8 @@ const s = StyleSheet.create({
     backgroundColor: '#FEF2F2', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 10,
   },
   urgentCountText: { fontSize: 11, fontWeight: '700', color: '#DC2626' },
-  openBadge: { backgroundColor: '#F0FDFA', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
-  openBadgeText: { fontSize: 11, fontWeight: '700', color: '#0F766E' },
+  openBadge: { backgroundColor: '#F1F0FD', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10 },
+  openBadgeText: { fontSize: 11, fontWeight: '700', color: '#554ADF' },
 
   // Tabs
   tabsScroll: { marginBottom: 0 },
@@ -327,7 +327,7 @@ const s = StyleSheet.create({
   },
   emptyIconWrap: {
     width: 60, height: 60, borderRadius: 18,
-    backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center', marginBottom: 4,
+    backgroundColor: '#F1F0FD', alignItems: 'center', justifyContent: 'center', marginBottom: 4,
   },
   emptyTitle: { fontSize: 15, fontWeight: '700', color: '#374151' },
   emptySub:   { fontSize: 13, color: '#9CA3AF', textAlign: 'center', paddingHorizontal: 32 },
@@ -355,9 +355,9 @@ const s = StyleSheet.create({
   cardMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   unitChip: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#F0FDFA', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6,
+    backgroundColor: '#F1F0FD', paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6,
   },
-  unitChipText: { fontSize: 10, fontWeight: '700', color: '#0F766E' },
+  unitChipText: { fontSize: 10, fontWeight: '700', color: '#554ADF' },
   metaDot:      { fontSize: 10, color: '#D1D5DB' },
   metaText:     { fontSize: 10, color: '#9CA3AF', fontWeight: '500' },
   cardTime:     { fontSize: 10, color: '#9CA3AF', marginLeft: 'auto' as any },

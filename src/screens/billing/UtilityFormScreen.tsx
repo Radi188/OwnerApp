@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { Text } from '../../components/Text';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -13,6 +13,7 @@ import {
 } from '../../components/ui';
 import { colors, font, spacing } from '../../theme';
 import { errMsg, money, toNum, todayYMD } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 /**
  * Create mode records electricity + water for a unit in one go (bulk endpoint, same as the web).
@@ -76,7 +77,7 @@ export default function UtilityFormScreen() {
   }, () => nav.goBack());
 
   const onDelete = () => confirmAction('Delete reading', 'Delete this meter reading?', async () => {
-    try { await utilityApi.remove(reading.id); nav.goBack(); } catch (e) { Alert.alert('Delete failed', errMsg(e)); }
+    try { await utilityApi.remove(reading.id); toast.deleted(); nav.goBack(); } catch (e) { toast.error(errMsg(e), { title: 'Delete failed' }); }
   });
 
   const usageE = str(f.values.electricity) ? Number(f.values.electricity) - prevE : null;

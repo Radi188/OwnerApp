@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, View } from 'react-native';
+import { View } from 'react-native';
 import { Text } from '../../components/Text';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigation } from '@react-navigation/native';
@@ -11,6 +11,7 @@ import {
 } from '../../components/ui';
 import { font, spacing } from '../../theme';
 import { errMsg } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 export default function RolesScreen() {
   const { can } = useAuth();
@@ -58,7 +59,7 @@ function RoleSheet({ role, onClose, onSaved }: { role: any; onClose: () => void;
   }, onSaved);
 
   const onDelete = () => confirmAction('Delete role', `Delete "${role.name}"? Users with this role will lose access.`, async () => {
-    try { await rolesApi.remove(role.id); onSaved(); } catch (e) { Alert.alert('Delete failed', errMsg(e)); }
+    try { await rolesApi.remove(role.id); toast.deleted(); onSaved(); } catch (e) { toast.error(errMsg(e), { title: 'Delete failed' }); }
   });
 
   return (

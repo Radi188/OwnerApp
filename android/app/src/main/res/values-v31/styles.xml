@@ -1,0 +1,13 @@
+<resources>
+
+    <!-- Android 12+ system splash: Pteah Indigo with the white mark, handing off to SplashScreen.tsx -->
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+        <!-- Pteah Indigo instead of white while the app starts, so launch → SplashScreen.tsx is seamless -->
+        <item name="android:windowBackground">@color/brand_primary</item>
+        <item name="android:windowSplashScreenBackground">@color/brand_primary</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/brand_primary</item>
+    </style>
+
+</resources>

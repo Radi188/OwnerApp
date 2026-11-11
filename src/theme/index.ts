@@ -3,12 +3,14 @@
 // rather than hard-coding hex values.
 
 export const colors = {
-  // Brand
-  primary:      '#0F766E',
-  primaryDark:  '#115E59',
-  primaryDeep:  '#0B3B38',
-  primarySoft:  '#F0FDFA',
-  primaryTint:  '#CCFBF1',
+  // Brand — from the Pteah Manager logo guide (src/assets/logo)
+  primary:      '#554ADF', // Pteah Indigo — symbol, app icon, buttons, links
+  primaryDark:  '#4339C4', // pressed / emphasised indigo
+  primaryDeep:  '#17153B', // Night Ink — dark backgrounds, wordmark
+  primarySoft:  '#F1F0FD', // indigo-tinted surface (icon chips, badges)
+  primaryTint:  '#DEDBFA', // indigo borders / subtle fills
+  primaryMuted: '#BBB6F5', // disabled buttons, empty-state icons
+  nightInk:     '#17153B',
   accent:       '#F59E0B',
 
   // Neutrals

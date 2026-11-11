@@ -16,8 +16,9 @@ import { useAuth } from '../context/AuthContext';
 import { useTranslation } from 'react-i18next';
 import {
   getAvailableBiometricType,
-  promptBiometrics,
-  loadBiometricCredentials,
+  getBiometricState,
+  unlockBiometricCredentials,
+  biometricLabel,
   BiometricType,
 } from '../services/biometrics';
 
@@ -47,11 +48,12 @@ export default function QuickLoginModal() {
       ]).start();
 
       // Check biometric availability
-      loadBiometricCredentials().then(creds => {
-        if (creds) getAvailableBiometricType().then(setBioType);
+      // No scan here — just whether biometric login is set up for this same account
+      getBiometricState().then(state => {
+        if (state.enabled && state.username === user?.username) getAvailableBiometricType().then(setBioType);
       });
     }
-  }, [quickLoginVisible]);
+  }, [quickLoginVisible, user?.username]);
 
   const shake = () => {
     Animated.sequence([
@@ -67,10 +69,9 @@ export default function QuickLoginModal() {
     setBioLoading(true);
     setError('');
     try {
-      const creds = await loadBiometricCredentials();
-      if (!creds) return;
-      const passed = await promptBiometrics(`Sign in as ${user?.username}`);
-      if (!passed) return;
+      // One scan unlocks the saved password
+      const creds = await unlockBiometricCredentials({ title: t('bio.promptTitle', { name: user?.username ?? '' }), cancel: t('bio.usePassword') });
+      if (!creds || creds.username !== user?.username) return;
       await submitQuickLogin(creds.password);
     } catch {
       setError(t('login.invalidCredentials'));
@@ -124,7 +125,7 @@ export default function QuickLoginModal() {
           {/* Lock icon */}
           <View style={s.iconWrap}>
             <View style={s.iconCircle}>
-              <Icon name="lock-closed" size={26} color="#0F766E" />
+              <Icon name="lock-closed" size={26} color="#554ADF" />
             </View>
           </View>
 
@@ -146,7 +147,7 @@ export default function QuickLoginModal() {
           {propertyId != null && (
             <View style={s.propRow}>
               <View style={s.propIcon}>
-                <Icon name="business" size={16} color="#0F766E" />
+                <Icon name="business" size={16} color="#554ADF" />
               </View>
               <View style={s.propInfo}>
                 <Text style={s.propLabel}>Property</Text>
@@ -206,15 +207,15 @@ export default function QuickLoginModal() {
               disabled={bioLoading || loading}
             >
               {bioLoading ? (
-                <ActivityIndicator color="#0F766E" size="small" />
+                <ActivityIndicator color="#554ADF" size="small" />
               ) : (
                 <>
                   <Icon
                     name={bioType === 'FaceID' ? 'scan-outline' : 'finger-print-outline'}
                     size={20}
-                    color="#0F766E"
+                    color="#554ADF"
                   />
-                  <Text style={s.bioBtnText}>Use {bioType}</Text>
+                  <Text style={s.bioBtnText}>{t('login.bioSignIn', { type: biometricLabel(bioType) })}</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -251,7 +252,7 @@ const s = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#F0FDFA',
+    backgroundColor: '#F1F0FD',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -283,7 +284,7 @@ const s = StyleSheet.create({
   },
   propIcon: {
     width: 34, height: 34, borderRadius: 10,
-    backgroundColor: '#F0FDFA', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#F1F0FD', alignItems: 'center', justifyContent: 'center',
   },
   propInfo:  { flex: 1 },
   propLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
@@ -292,7 +293,7 @@ const s = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: '#0F766E',
+    backgroundColor: '#554ADF',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -318,10 +319,10 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#0F766E',
+    backgroundColor: '#554ADF',
     borderRadius: 16,
     paddingVertical: 16,
-    shadowColor: '#0F766E',
+    shadowColor: '#554ADF',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 10,
@@ -334,11 +335,11 @@ const s = StyleSheet.create({
   bioBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, paddingVertical: 14, borderRadius: 16,
-    borderWidth: 1.5, borderColor: '#CCFBF1', backgroundColor: '#F5F3FF',
+    borderWidth: 1.5, borderColor: '#DEDBFA', backgroundColor: '#F5F3FF',
     marginBottom: 12,
   },
   bioBtnDisabled: { opacity: 0.6 },
-  bioBtnText: { fontSize: 15, fontWeight: '600', color: '#0F766E' },
+  bioBtnText: { fontSize: 15, fontWeight: '600', color: '#554ADF' },
 
   logoutBtn:  { alignItems: 'center', paddingVertical: 8 },
   logoutText: { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },

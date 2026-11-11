@@ -3,10 +3,10 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { Text } from './Text';
 import { Sheet } from './Sheet';
-import { Input, Select, DateField } from './form';
+import { Input, Select, DateField, ImageUpload } from './form';
 import { Button } from './ui';
 import { errMsg, money, todayYMD } from '../utils/format';
-import { num, payableAmount, paymentsApi } from '../services/api';
+import { num, payableAmount, paymentsApi, type UploadFile } from '../services/api';
 import type { PaymentMethod } from '../services/types';
 import { colors, radius } from '../theme';
 
@@ -35,6 +35,8 @@ export default function RecordPaymentSheet({
   const [date, setDate] = useState(todayYMD());
   const [ref, setRef] = useState('');
   const [note, setNote] = useState('');
+  // Receipt photo (multipart `attachment`) — only kept by the server if the payment is accepted
+  const [receipt, setReceipt] = useState<UploadFile | null>(null);
   const [error, setError] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
 
@@ -46,6 +48,7 @@ export default function RecordPaymentSheet({
     setDate(todayYMD());
     setRef('');
     setNote('');
+    setReceipt(null);
     setError(undefined);
   }, [visible, max]);
 
@@ -66,6 +69,7 @@ export default function RecordPaymentSheet({
         paymentDate: date || undefined,
         transactionId: ref.trim() || undefined,
         note: note.trim() || undefined,
+        attachment: receipt ?? undefined,
       });
       onSaved();
     } catch (e) {
@@ -135,6 +139,14 @@ export default function RecordPaymentSheet({
         <Input label={t('payment.reference')} icon="barcode-outline" value={ref} onChangeText={setRef} autoCapitalize="characters" />
       ) : null}
       <Input label={t('payment.note')} value={note} onChangeText={setNote} multiline maxLength={200} />
+      <ImageUpload
+        label={t('payment.receipt')}
+        placeholder={t('payment.addReceipt')}
+        icon="receipt-outline"
+        aspectRatio={1.3}
+        value={receipt}
+        onChange={setReceipt}
+      />
     </Sheet>
   );
 }

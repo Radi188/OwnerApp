@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 import { pickOne, rolesApi } from '../../services/api';
 import { colors, radius, spacing } from '../../theme';
 import { capitalize, errMsg } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 type Perm = { id: number; name: string; description?: string };
 type Feature = { key: string; title: string; perms: Perm[] };
@@ -27,6 +28,18 @@ function toFeatures(grouped: any): Feature[] {
   };
   walk(grouped, []);
   return out.sort((a, b) => a.title.localeCompare(b.title));
+}
+
+/**
+ * What the role has today. `GET /roles/:id` returns `rolePermission: [{ id, permissionId }]`;
+ * older responses used grouped `permissions` (names). Null when neither is present.
+ */
+function currentPermissionIds(roleData: any): { ids: number[]; names: Set<string> } | null {
+  if (Array.isArray(roleData?.rolePermission)) {
+    return { ids: roleData.rolePermission.map((rp: any) => Number(rp.permissionId)).filter(Number.isFinite), names: new Set() };
+  }
+  if (roleData?.permissions) return { ids: [], names: namesOf(roleData.permissions) };
+  return null;
 }
 
 /** Names the role already has (its `permissions` come grouped like the login response). */
@@ -50,24 +63,36 @@ export default function RolePermissionsScreen() {
   const { role } = useRoute<any>().params as { role: any };
   const { user, hasPermission, can } = useAuth();
   const ownRole = user?.roleId === role.id || user?.role?.id === role.id;
-  const readOnly = ownRole || !can('assign', 'permission');
 
   const all = useApi(async () => {
-    const [g, r] = await Promise.all([rolesApi.groupedPermissions(), rolesApi.get(role.id)]);
-    return { features: toFeatures((g as any)?.data ?? g), role: pickOne<any>(r, 'roles', 'role') };
+    const [g, r] = await Promise.all([
+      rolesApi.groupedPermissions().catch((e: any) => {
+        // GET /permissions/grouped needs `view permissions` — explain instead of a raw 403
+        if (e?.status === 403) throw new Error(t('rolePerms.needViewPermissions'));
+        throw e;
+      }),
+      rolesApi.get(role.id),
+    ]);
+    const roleData = pickOne<any>(r, 'roles', 'role');
+    return { features: toFeatures((g as any)?.data ?? g), role: roleData, current: currentPermissionIds(roleData) };
   }, [role.id], { refetchOnFocus: false });
+
+  // Never allow a save that could wipe the role: we must know what it has today
+  const knowsCurrent = !!all.data?.current;
+  const readOnly = ownRole || !can('assign', 'permission') || (!!all.data && !knowsCurrent);
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [q, setQ] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // Initial selection = the role's current permissions
+  // Initial selection = the role's current permissions (all of them, even ones not listed here,
+  // because POST /roles/:id/permissions replaces the whole list)
   useEffect(() => {
-    if (!all.data) return;
-    const have = namesOf(all.data.role?.permissions);
-    const ids = new Set<number>();
-    all.data.features.forEach(f => f.perms.forEach(p => { if (have.has(p.name)) ids.add(p.id); }));
-    setSelected(ids);
+    if (!all.data?.current) return;
+    const { ids, names } = all.data.current;
+    const next = new Set<number>(ids);
+    all.data.features.forEach(f => f.perms.forEach(p => { if (names.has(p.name)) next.add(p.id); }));
+    setSelected(next);
   }, [all.data]);
 
   const features = useMemo(() => {
@@ -97,7 +122,7 @@ export default function RolePermissionsScreen() {
         await rolesApi.setPermissions(role.id, [...selected]);
         nav.goBack();
       } catch (e) {
-        Alert.alert(t('common.error'), errMsg(e));
+        toast.error(errMsg(e));
       } finally {
         setSaving(false);
       }
@@ -124,7 +149,9 @@ export default function RolePermissionsScreen() {
       {readOnly ? (
         <View style={styles.notice}>
           <Icon name="lock-closed-outline" size={16} color={colors.warning} />
-          <Text style={styles.noticeText}>{ownRole ? t('rolePerms.ownRole') : t('rolePerms.noAccess')}</Text>
+          <Text style={styles.noticeText}>
+            {ownRole ? t('rolePerms.ownRole') : all.data && !knowsCurrent ? t('rolePerms.unknownCurrent') : t('rolePerms.noAccess')}
+          </Text>
         </View>
       ) : (
         <Text style={styles.hint}>{t('rolePerms.hint')}</Text>

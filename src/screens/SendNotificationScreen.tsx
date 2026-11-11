@@ -1,5 +1,4 @@
 import React from 'react';
-import { Alert } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { notificationsApi } from '../services/api';
 import { required, useForm } from '../hooks/useForm';
@@ -25,7 +24,8 @@ export default function SendNotificationScreen() {
 
   const send = f.submit(
     v => notificationsApi.send({ title: v.title.trim(), body: v.body.trim(), type: v.type, userId }),
-    () => { Alert.alert('Sent', `Notification sent to ${name}.`); nav.goBack(); },
+    () => nav.goBack(),
+    { success: `Notification sent to ${name}` },
   );
 
   return (

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Pteah Indigo — brand primary -->
+    <color name="ic_launcher_background">#554ADF</color>
+    <color name="brand_primary">#554ADF</color>
+</resources>

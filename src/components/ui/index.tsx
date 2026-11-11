@@ -22,7 +22,7 @@ import { colors, font, radius, shadow, spacing, statusTone, Tone, toneColors } f
 import { capitalize, initials } from '../../utils/format';
 export { Sheet } from '../Sheet';
 // Form controls live in components/form — re-exported here under the names screens already use
-export { Input as TextField, Select as SelectField, DateField, Input, Select, FieldShell } from '../form';
+export { Input as TextField, Select as SelectField, DateField, Input, Select, FieldShell, ImageUpload } from '../form';
 
 // ─── Layout ──────────────────────────────────────────────────────────────────
 

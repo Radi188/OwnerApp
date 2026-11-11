@@ -11,3 +11,5 @@ export { Select } from './Select';
 export type { SelectOption, SelectProps } from './Select';
 export { DateField } from './DateField';
 export type { DateFieldProps } from './DateField';
+export { ImageUpload, chooseImage } from './ImageUpload';
+export type { ImageUploadProps } from './ImageUpload';

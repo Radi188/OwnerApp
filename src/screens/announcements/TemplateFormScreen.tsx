@@ -1,5 +1,4 @@
 import React from 'react';
-import { Alert } from 'react-native';
 import { Text } from '../../components/Text';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { templatesApi } from '../../services/api';
@@ -9,6 +8,7 @@ import { Button, Card, confirmAction, FilterChips, Header, Screen, TextField } f
 import { colors, font, spacing } from '../../theme';
 import { errMsg, stripHtml, textToHtml } from '../../utils/format';
 import { ANNOUNCEMENT_TYPES } from './AnnouncementsScreen';
+import { toast } from '../../components/Toast';
 
 export default function TemplateFormScreen() {
   const nav = useNavigation<any>();
@@ -30,7 +30,7 @@ export default function TemplateFormScreen() {
   }, () => nav.goBack());
 
   const onDelete = () => confirmAction('Delete template', `Delete "${template?.name}"?`, async () => {
-    try { await templatesApi.remove(template.id); nav.goBack(); } catch (e) { Alert.alert('Delete failed', errMsg(e)); }
+    try { await templatesApi.remove(template.id); toast.deleted(); nav.goBack(); } catch (e) { toast.error(errMsg(e), { title: 'Delete failed' }); }
   });
 
   return (

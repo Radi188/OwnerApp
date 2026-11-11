@@ -33,14 +33,39 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Pteah Manager uses the camera to take photos of ID cards, passports and receipts.</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to sign in to NestKey quickly and securely.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Pteah Manager needs access to your photos to upload ID cards, passports and receipts.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Ionicons.ttf</string>
+		<string>KantumruyPro-Regular.ttf</string>
+		<string>KantumruyPro-Medium.ttf</string>
+		<string>KantumruyPro-SemiBold.ttf</string>
+		<string>KantumruyPro-Bold.ttf</string>
 	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

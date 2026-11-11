@@ -10,12 +10,13 @@ import {
   Avatar, Badge, Card, EmptyState, ErrorView, FilterChips, Header, IconButton, ListRow, LoadingView, Screen, SearchBar,
 } from '../components/ui';
 import { colors, font, spacing } from '../theme';
+import { statusLabel } from '../i18n';
 
 export default function TenantsScreen() {
   const nav = useNavigation<any>();
   const { propertyId, can } = useAuth();
   const [q, setQ] = useState('');
-  const [scope, setScope] = useState<'here' | 'all' | 'Inactive'>('here');
+  const [scope, setScope] = useState<'here' | 'all' | 'movedOut'>('here');
 
   const { data, loading, error, refreshing, refresh } = useApi(async () => {
     const [t, c] = await Promise.all([
@@ -36,7 +37,7 @@ export default function TenantsScreen() {
     return tenants
       .filter(t => {
         if (scope === 'here') return byTenant.has(t.id);
-        if (scope === 'Inactive') return t.status !== 'Active';
+        if (scope === 'movedOut') return t.status !== 'Active';
         return true;
       })
       .filter(t => !s || [t.name, t.phoneNumber, byTenant.get(t.id)?.unit?.unitCode].some(x => String(x ?? '').toLowerCase().includes(s)))
@@ -65,7 +66,7 @@ export default function TenantsScreen() {
         options={[
           { label: 'Renting here', value: 'here', count: byTenant.size },
           { label: 'All tenants', value: 'all', count: tenants.length },
-          { label: 'Inactive', value: 'Inactive', count: tenants.filter(t => t.status !== 'Active').length },
+          { label: statusLabel('Moved Out'), value: 'movedOut', count: tenants.filter(t => t.status !== 'Active').length },
         ]}
       />
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '../../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -13,6 +13,7 @@ import { confirmAction, ErrorView, LoadingView, ProgressBar, Screen } from '../.
 import { colors, radius, spacing, statusTone, toneColors } from '../../theme';
 import { capitalize, daysUntil, errMsg, initials, money, toNum } from '../../utils/format';
 import { activeContract, unitStatus } from './UnitsScreen';
+import { toast } from '../../components/Toast';
 
 const METERS = {
   electricity: { icon: 'flash', unit: 'kWh', tone: toneColors.warning, startKey: 'startElectricityReading' },
@@ -57,9 +58,9 @@ export default function UnitDetailScreen() {
     t('unitDetail.deleteConfirm', { code: unit?.unitCode }),
     async () => {
       try {
-        await unitsApi.remove(unitId);
+        await unitsApi.remove(unitId); toast.deleted();
         nav.goBack();
-      } catch (e) { Alert.alert(t('unitDetail.deleteFailed'), errMsg(e)); }
+      } catch (e) { toast.error(errMsg(e), { title: t('unitDetail.deleteFailed') }); }
     },
     t('unitDetail.delete'),
   );

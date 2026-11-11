@@ -6,8 +6,9 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import { Text } from '../../components/Text';
 import { Sheet } from '../../components/Sheet';
-import { Input } from '../../components/form';
+import { Input, chooseImage } from '../../components/form';
 import RecordPaymentSheet from '../../components/RecordPaymentSheet';
+import RejectPaymentSheet from '../../components/RejectPaymentSheet';
 import { downloadAndOpen, MIME } from '../../services/files';
 import { dayLabel, monthLabel } from '../../i18n';
 import { invoicesApi, num, payableAmount, paymentsApi, pickOne } from '../../services/api';
@@ -17,6 +18,7 @@ import { useApi } from '../../hooks/useApi';
 import { Button, ErrorView, LoadingView, ProgressBar, Screen } from '../../components/ui';
 import { colors, radius, spacing, toneColors } from '../../theme';
 import { errMsg, initials, money, riel } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 const LINE_ICON: Record<string, string> = {
   rent: 'home-outline', electricity: 'flash-outline', water: 'water-outline', parking: 'car-outline',
@@ -65,10 +67,10 @@ export default function InvoiceDetailScreen() {
     setBusy(true);
     try {
       await fn();
-      if (okMsg) Alert.alert(okMsg);
+      if (okMsg) toast.success(okMsg);
       await reload();
     } catch (e) {
-      Alert.alert(t('common.error'), errMsg(e));
+      toast.error(errMsg(e));
     } finally {
       setBusy(false);
     }
@@ -78,8 +80,21 @@ export default function InvoiceDetailScreen() {
   const onPaymentPress = (p: Payment) => {
     const buttons: any[] = [];
     if (p.status === 'pending' && can('verify', 'payment')) {
-      buttons.push({ text: t('invoiceView.verify'), onPress: () => run(() => paymentsApi.verify(p.id, 'verified')) });
+      buttons.push({ text: t('invoiceView.verify'), onPress: () => run(() => paymentsApi.verify(p.id, 'verified'), t('payments.verified')) });
       buttons.push({ text: t('invoiceView.reject'), style: 'destructive', onPress: () => askReject(p) });
+    }
+    // Receipt: upload a new photo or remove it (PATCH /payments/:id multipart — FRONTEND_UPDATE §12)
+    if (can('edit', 'payment')) {
+      buttons.push({
+        text: p.attachment ? t('payment.replaceReceipt') : t('payment.addReceipt'),
+        onPress: async () => {
+          const file = await chooseImage(t('payment.receipt'));
+          if (file) run(() => paymentsApi.update(p.id, { attachment: file }), t('payment.receiptSaved'));
+        },
+      });
+      if (p.attachment) {
+        buttons.push({ text: t('payment.removeReceipt'), onPress: () => run(() => paymentsApi.update(p.id, { attachment: '' }), t('payment.receiptRemoved')) });
+      }
     }
     if (can('delete', 'payment')) {
       buttons.push({
@@ -95,17 +110,9 @@ export default function InvoiceDetailScreen() {
       [...buttons, { text: t('common.cancel'), style: 'cancel' }]);
   };
 
-  const askReject = (p: Payment) => {
-    // Alert.prompt is iOS-only; fall back to a plain reject elsewhere
-    if ((Alert as any).prompt) {
-      (Alert as any).prompt(t('invoiceView.rejectTitle'), t('invoiceView.rejectMsg'), [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('invoiceView.reject'), style: 'destructive', onPress: (note?: string) => run(() => paymentsApi.verify(p.id, 'rejected', note || undefined)) },
-      ]);
-    } else {
-      run(() => paymentsApi.verify(p.id, 'rejected'));
-    }
-  };
+  // Reject asks for a reason the tenant will see (iOS + Android) — FRONTEND_UPDATE §11
+  const [rejecting, setRejecting] = useState<Payment | null>(null);
+  const askReject = (p: Payment) => setRejecting(p);
 
   // ── Invoice actions ────────────────────────────────────────────────────────
   // Khmer PDF from the server (property logo, bank details, KHQR)
@@ -127,7 +134,7 @@ export default function InvoiceDetailScreen() {
       { text: t('common.cancel'), style: 'cancel' },
       {
         text: t('unitDetail.delete'), style: 'destructive',
-        onPress: async () => { try { await invoicesApi.remove(invoiceId); nav.goBack(); } catch (e) { Alert.alert(t('common.error'), errMsg(e)); } },
+        onPress: async () => { try { await invoicesApi.remove(invoiceId); toast.deleted(); nav.goBack(); } catch (e) { toast.error(errMsg(e)); } },
       },
     ]);
   };
@@ -330,6 +337,11 @@ export default function InvoiceDetailScreen() {
       >
         <Input label={t('invoiceView.discount')} prefix="$" keyboardType="decimal-pad" value={discount} onChangeText={setDiscount} hint={t('invoiceView.discountHint')} />
       </Sheet>
+      <RejectPaymentSheet
+        payment={rejecting ? { id: rejecting.id, amount: rejecting.amount, tenantName: inv?.tenant?.name } : null}
+        onClose={() => setRejecting(null)}
+        onDone={() => reload()}
+      />
     </Screen>
   );
 }

@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '../../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import { monthLabel } from '../../i18n';
-import { reportsApi } from '../../services/api';
+import { fileUrl, pickOne, propertiesApi, reportsApi } from '../../services/api';
+import { exportReport, type ExportLang, type ExportMeta } from '../../services/reportExport';
+import i18n from '../../i18n';
 import { useAuth } from '../../context/AuthContext';
 import { useApi } from '../../hooks/useApi';
 import { DateField, ErrorView, LoadingView, Screen } from '../../components/ui';
@@ -16,6 +18,7 @@ import { downloadAndOpen, MIME } from '../../services/files';
 import { colors, spacing } from '../../theme';
 import { thisMonthYM, todayYMD } from '../../utils/format';
 import { ReportBody } from './ReportBodies';
+import { toast } from '../../components/Toast';
 
 export type ReportKind =
   | 'payment-status' | 'dashboard' | 'room-tenants' | 'expense-matrix'
@@ -97,20 +100,56 @@ export default function ReportsScreen() {
 
   const { from, to } = rangeFor(preset);
 
-  // ── Excel export (REPORTS_API: format=xlsx on the 4 client reports, /export = full workbook) ──
-  const XLSX_KINDS = ['payment-status', 'dashboard', 'room-tenants', 'expense-matrix'] as const;
-  type XlsxKind = typeof XLSX_KINDS[number];
+  // ── Export: this report as a styled Excel / PDF built on the device, or the server's full workbook ──
   const [exportSheet, setExportSheet] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportLang, setExportLang] = useState<ExportLang>(i18n.language === 'km' ? 'kh' : 'en');
   const rangeStart = kind === 'dashboard' || kind === 'expense-matrix' ? shiftMonth(yearMonth, -(Number(months) - 1)) : yearMonth;
-  const exportFile = async (name: XlsxKind | 'export', lang: 'en' | 'kh') => {
+
+  /** The period the current report covers, plus a short tag for the file name. */
+  const exportPeriod = (): { period: ExportMeta['period']; tag: string } => {
+    if (kind === 'dashboard' || kind === 'expense-matrix') return { period: { type: 'months', from: rangeStart, to: yearMonth }, tag: `${rangeStart}_${yearMonth}` };
+    if (kind === 'payment-status' || kind === 'room-tenants' || kind === 'monthly-summary') return { period: { type: 'month', ym: yearMonth }, tag: yearMonth };
+    if (RANGED.includes(kind)) return { period: { type: 'days', from, to }, tag: `${from}_${to}` };
+    if (kind === 'unpaid-invoices') return { period: { type: 'asOf', date: asOf }, tag: asOf };
+    return { period: { type: 'asOf', date: todayYMD() }, tag: todayYMD() };
+  };
+
+  const exportThis = async (format: 'xlsx' | 'pdf') => {
+    setExportSheet(false);
+    if (!data) { toast.warning(t('reports.noData')); return; }
+    setExporting(true);
+    try {
+      // Property logo for the PDF header (best effort)
+      const logo = format === 'pdf' && propertyId
+        ? await propertiesApi.get(propertyId).then(r => pickOne<any>(r, 'properties', 'property')?.logo).catch(() => null)
+        : null;
+      const { period, tag } = exportPeriod();
+      await exportReport({
+        kind,
+        data,
+        format,
+        lang: exportLang,
+        meta: { tabKey: active.key, propertyName: propertyName ?? t('billing.allProperties'), period },
+        logoUrl: logo ? fileUrl(logo) : undefined,
+        fileTag: tag,
+      });
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e), { title: t('reportExport.failed') });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  /** The server's full monthly workbook (all client reports in one .xlsx). */
+  const exportWorkbook = async () => {
     setExportSheet(false);
     setExporting(true);
     try {
-      const path = reportsApi.excelPath(name, { from: rangeStart, to: yearMonth, lang });
-      await downloadAndOpen(path, `${name}-${rangeStart}_${yearMonth}${lang === 'kh' ? '-kh' : ''}.xlsx`, MIME.xlsx);
+      const path = reportsApi.excelPath('export', { from: rangeStart, to: yearMonth, lang: exportLang });
+      await downloadAndOpen(path, `workbook-${rangeStart}_${yearMonth}${exportLang === 'kh' ? '-kh' : ''}.xlsx`, MIME.xlsx);
     } catch (e: any) {
-      Alert.alert(t('common.error'), e?.message ?? String(e));
+      toast.error(e?.message ?? String(e), { title: t('reportExport.failed') });
     } finally {
       setExporting(false);
     }
@@ -155,7 +194,7 @@ export default function ReportsScreen() {
           <Text style={styles.title}>{t('reports.title')}</Text>
           <Text style={styles.subtitle} numberOfLines={1}>{propertyName ?? t('billing.allProperties')}</Text>
         </View>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => setExportSheet(true)} disabled={exporting} accessibilityLabel={t('reports.excel')}>
+        <TouchableOpacity style={styles.iconBtn} onPress={() => setExportSheet(true)} disabled={exporting} accessibilityLabel={t('reportExport.title')}>
           {exporting ? <ActivityIndicator size="small" color={colors.primary} /> : <Icon name="download-outline" size={19} color={colors.ink} />}
         </TouchableOpacity>
       </View>
@@ -252,38 +291,62 @@ export default function ReportsScreen() {
         )}
       </View>
 
-      <Sheet visible={exportSheet} onClose={() => setExportSheet(false)} title={t('reports.excel')}>
-        <Text style={styles.exportPeriod}>
-          {rangeStart === yearMonth ? monthLabel(yearMonth) : `${monthLabel(rangeStart)} – ${monthLabel(yearMonth)}`}
+      <Sheet visible={exportSheet} onClose={() => setExportSheet(false)} title={t('reportExport.title')}>
+        <Text style={styles.exportLabelSmall}>{t('reportExport.language')}</Text>
+        <Segments<ExportLang>
+          value={exportLang}
+          onChange={setExportLang}
+          options={[{ value: 'en', label: 'English' }, { value: 'kh', label: 'ខ្មែរ' }]}
+        />
+
+        <Text style={[styles.exportLabelSmall, { marginTop: spacing.lg }]}>
+          {t('reportExport.thisReport')} · {t(`reports.tabs.${active.key}`)}
         </Text>
-        {(XLSX_KINDS as readonly string[]).includes(kind) ? (
-          <>
-            <ExportRow icon="document-outline" label={t('reports.thisReport', { lang: 'English' })} onPress={() => exportFile(kind as XlsxKind, 'en')} />
-            <ExportRow icon="document-outline" label={t('reports.thisReport', { lang: 'ខ្មែរ' })} onPress={() => exportFile(kind as XlsxKind, 'kh')} />
-          </>
-        ) : null}
-        <ExportRow icon="albums-outline" label={t('reports.fullWorkbook', { lang: 'English' })} onPress={() => exportFile('export', 'en')} />
-        <ExportRow icon="albums-outline" label={t('reports.fullWorkbook', { lang: 'ខ្មែរ' })} onPress={() => exportFile('export', 'kh')} />
+        <View style={styles.exportCard}>
+          <ExportRow icon="grid-outline" title={t('reportExport.excel')} subtitle={t('reportExport.excelSub')} badge="XLSX" onPress={() => exportThis('xlsx')} first />
+          <ExportRow icon="document-text-outline" title={t('reportExport.pdf')} subtitle={t('reportExport.pdfSub')} badge="PDF" onPress={() => exportThis('pdf')} />
+        </View>
+
+        <Text style={[styles.exportLabelSmall, { marginTop: spacing.lg }]}>{t('reportExport.allReports')}</Text>
+        <View style={styles.exportCard}>
+          <ExportRow icon="albums-outline" title={t('reportExport.fullWorkbook')} subtitle={t('reportExport.fullWorkbookSub')} badge="XLSX" onPress={exportWorkbook} first />
+        </View>
       </Sheet>
     </Screen>
   );
 }
 
-function ExportRow({ icon, label, onPress }: { icon: string; label: string; onPress: () => void }) {
+function ExportRow({ icon, title, subtitle, badge, onPress, first }: {
+  icon: string; title: string; subtitle: string; badge: string; onPress: () => void; first?: boolean;
+}) {
   return (
-    <TouchableOpacity style={styles.exportRow} onPress={onPress} activeOpacity={0.7}>
-      <View style={styles.exportIcon}><Icon name={icon} size={18} color={colors.success} /></View>
-      <Text style={styles.exportLabel}>{label}</Text>
-      <Icon name="download-outline" size={17} color={colors.muted} />
+    <TouchableOpacity style={[styles.exportRow, !first && styles.exportSep]} onPress={onPress} activeOpacity={0.7}>
+      <View style={styles.exportIcon}><Icon name={icon} size={19} color={colors.primary} /></View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <View style={styles.exportTitleRow}>
+          <Text style={styles.exportTitle} numberOfLines={1}>{title}</Text>
+          <Text style={styles.exportBadge}>{badge}</Text>
+        </View>
+        <Text style={styles.exportSub} numberOfLines={2}>{subtitle}</Text>
+      </View>
+      <Icon name="download-outline" size={18} color={colors.primary} />
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  exportPeriod: { fontSize: 13, color: colors.textSecondary, marginBottom: 10 },
-  exportRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.divider },
-  exportIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: colors.successSoft, alignItems: 'center', justifyContent: 'center' },
-  exportLabel: { flex: 1, fontSize: 15, fontWeight: '500', color: colors.ink },
+  exportLabelSmall: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, marginBottom: 8, letterSpacing: 0.3 },
+  exportCard: { borderWidth: 1, borderColor: colors.divider, borderRadius: 14, overflow: 'hidden' },
+  exportRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: 14 },
+  exportSep: { borderTopWidth: 1, borderTopColor: colors.divider },
+  exportIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  exportTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  exportTitle: { fontSize: 15, fontWeight: '700', color: colors.ink, flexShrink: 1 },
+  exportBadge: {
+    fontSize: 9, fontWeight: '800', color: colors.primary, backgroundColor: colors.primarySoft,
+    paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, overflow: 'hidden', letterSpacing: 0.5,
+  },
+  exportSub: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   header: { backgroundColor: colors.bg, paddingHorizontal: spacing.lg },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   title: { fontSize: 22, fontWeight: '700', color: colors.ink, letterSpacing: -0.4 },

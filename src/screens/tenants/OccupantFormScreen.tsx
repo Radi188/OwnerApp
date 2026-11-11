@@ -1,21 +1,23 @@
-import React from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import React, { useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { Text } from '../../components/Text';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { occupantsApi } from '../../services/api';
+import { occupantsApi, type UploadFile } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { required, str, useForm } from '../../hooks/useForm';
-import { Button, Card, confirmAction, FilterChips, Header, Screen, TextField } from '../../components/ui';
+import { Button, Card, confirmAction, FilterChips, Header, ImageUpload, Screen, TextField } from '../../components/ui';
 import { font, spacing } from '../../theme';
 import { errMsg } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
-const RELATIONSHIPS = ['Spouse', 'Child', 'Parent', 'Sibling', 'Relative', 'Friend', 'Roommate', 'Other'];
+export const RELATIONSHIPS = ['Spouse', 'Child', 'Parent', 'Sibling', 'Relative', 'Friend', 'Roommate', 'Other'];
 
 export default function OccupantFormScreen() {
   const nav = useNavigation<any>();
   const { tenantId, occupant } = useRoute<any>().params;
   const editing = !!occupant;
   const { can } = useAuth();
+  const [idPhoto, setIdPhoto] = useState<UploadFile | null>(null);
 
   const f = useForm({
     name: occupant?.name ?? '',
@@ -35,13 +37,14 @@ export default function OccupantFormScreen() {
       vehicleType: str(v.vehicleType),
       vehicleModel: str(v.vehicleModel),
       plateNumber: str(v.plateNumber),
+      idCardPassport: idPhoto ?? undefined,
     };
     if (editing) await occupantsApi.update(occupant.id, body);
     else await occupantsApi.create(body);
-  }, () => nav.goBack());
+  }, () => nav.goBack(), { success: editing ? 'Occupant updated' : 'Occupant added' });
 
   const onDelete = () => confirmAction('Remove occupant', `Remove ${occupant?.name}?`, async () => {
-    try { await occupantsApi.remove(occupant.id); nav.goBack(); } catch (e) { Alert.alert('Remove failed', errMsg(e)); }
+    try { await occupantsApi.remove(occupant.id); toast.deleted(); nav.goBack(); } catch (e) { toast.error(errMsg(e), { title: 'Remove failed' }); }
   });
 
   return (
@@ -59,6 +62,12 @@ export default function OccupantFormScreen() {
           style={{ marginBottom: spacing.lg }}
         />
         <TextField label="Phone number" keyboardType="phone-pad" {...f.field('phoneNumber')} />
+        <ImageUpload
+          label="ID card / passport"
+          placeholder="Upload ID card / passport"
+          value={idPhoto ?? occupant?.idCardPassport ?? null}
+          onChange={setIdPhoto}
+        />
       </Card>
       <Card style={{ marginTop: spacing.lg }}>
         <TextField label="Vehicle type" placeholder="Motorcycle" {...f.field('vehicleType')} />

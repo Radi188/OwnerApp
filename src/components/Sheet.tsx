@@ -5,6 +5,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { Text } from './Text';
+import { ToastHost } from './Toast';
 import { colors, spacing } from '../theme';
 
 /** Bottom sheet modal with a drag handle, optional title + close, scrollable body and footer. */
@@ -32,6 +33,8 @@ export function Sheet({
           {footer ? <View style={{ marginTop: 12 }}>{footer}</View> : null}
         </View>
       </KeyboardAvoidingView>
+      {/* Modals are a separate window on iOS — give toasts a layer above the sheet */}
+      <ToastHost />
     </Modal>
   );
 }

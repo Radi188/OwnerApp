@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -9,6 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import { required, useForm } from '../hooks/useForm';
 import { Button, Card, Header, Screen, TextField } from '../components/ui';
 import { colors, radius, spacing } from '../theme';
+import { getBiometricState, saveBiometricCredentials } from '../services/biometrics';
 
 /**
  * Change password. In `forced` mode (first login with a temporary password, `mustChangePassword`)
@@ -31,24 +32,26 @@ export default function ChangePasswordScreen() {
 
   const save = f.submit(
     async v => {
-      await authApi.changePassword(v.currentPassword, v.newPassword, v.confirmPassword);
-      if (forced) {
-        // Old token is now invalid — sign in again with the new password
+      // Every other session is signed out; this device gets new tokens (saved by changePassword)
+      const res = await authApi.changePassword(v.currentPassword, v.newPassword, v.confirmPassword);
+      if (!res.tokensRenewed) {
+        // Older server: the old token is now invalid — sign in again with the new password
         try {
           await auth.submitQuickLogin(v.newPassword);
         } catch {
           auth.logout();
           return;
         }
-        if (auth.user) auth.updateUser({ ...auth.user, mustChangePassword: false });
       }
-    },
-    () => {
-      if (!forced) {
-        Alert.alert(t('changePassword.doneTitle'), t('changePassword.doneMsg'));
-        nav.goBack();
+      // Keep Face ID / fingerprint sign-in working with the new password
+      const bio = await getBiometricState();
+      if (bio.enabled && bio.username === auth.user?.username) {
+        await saveBiometricCredentials(auth.user!.username, v.newPassword, auth.propertyId ?? undefined, auth.propertyName ?? undefined).catch(() => {});
       }
+      if (forced && auth.user) auth.updateUser({ ...auth.user, mustChangePassword: false });
     },
+    () => { if (!forced) nav.goBack(); },
+    { success: t('changePassword.doneMsg') },
   );
 
   return (

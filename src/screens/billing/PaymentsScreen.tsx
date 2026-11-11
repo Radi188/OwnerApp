@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Alert, Linking, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
@@ -10,18 +10,41 @@ import { EmptyState, ErrorView, LoadingView, Screen } from '../../components/ui'
 import { useApi } from '../../hooks/useApi';
 import { useAuth } from '../../context/AuthContext';
 import { dayLabel } from '../../i18n';
-import { fileUrl, paymentsApi, pickList } from '../../services/api';
+import { ApiError, fileUrl, paymentsApi, pickList } from '../../services/api';
+import RejectPaymentSheet from '../../components/RejectPaymentSheet';
 import type { Payment } from '../../services/types';
 import { colors, radius, spacing, toneColors } from '../../theme';
 import { errMsg, money } from '../../utils/format';
+import { toast } from '../../components/Toast';
 
 type View_ = 'pending' | 'all';
 const RECORD_TONE = { verified: toneColors.success, pending: toneColors.warning, rejected: toneColors.danger };
 
-/** Payments list + "to verify" queue for tenant-submitted payments (FRONTEND_GUIDE §13). */
+/** Stand-alone Payments screen (deep links). The same list lives in the Billing → Payments tab. */
 export default function PaymentsScreen() {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
+  const nav = useNavigation<any>();
+  const header = (
+    <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+      <View style={styles.headerRow}>
+        <TouchableOpacity style={styles.iconBtn} onPress={() => nav.goBack()} hitSlop={6} accessibilityLabel="Back">
+          <Icon name="chevron-back" size={20} color={colors.ink} />
+        </TouchableOpacity>
+        <Text style={[styles.title, { flex: 1 }]}>{t('payments.title')}</Text>
+      </View>
+    </View>
+  );
+  return <PaymentsView header={header} />;
+}
+
+/**
+ * Payments list + "to verify" queue for tenant-submitted payments (FRONTEND_GUIDE §13).
+ * `header` is the screen header (Billing tabs or a back-button header); `onChanged` lets the
+ * parent refresh badges after a verify / reject.
+ */
+export function PaymentsView({ header, tabBarSpace, onChanged }: { header: React.ReactNode; tabBarSpace?: boolean; onChanged?: () => void }) {
+  const { t } = useTranslation();
   const nav = useNavigation<any>();
   const { can, propertyId } = useAuth();
   const [view, setView] = useState<View_>('pending');
@@ -38,38 +61,31 @@ export default function PaymentsScreen() {
     setBusyId(p.id);
     try {
       await paymentsApi.verify(p.id, status, note);
+      toast.success(status === 'verified' ? t('payments.verified') : t('payments.rejected'));
       await reload();
+      onChanged?.();
     } catch (e) {
-      Alert.alert(t('common.error'), errMsg(e));
+      // 409: another staff member already verified / rejected it — refresh the list
+      if ((e as ApiError)?.status === 409) {
+        toast.info(t('paymentReject.alreadyHandled'));
+        await reload();
+        onChanged?.();
+      } else {
+        toast.error(errMsg(e));
+      }
     } finally {
       setBusyId(null);
     }
   };
 
-  const reject = (p: Payment) => {
-    if ((Alert as any).prompt) {
-      (Alert as any).prompt(t('invoiceView.rejectTitle'), t('invoiceView.rejectMsg'), [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('invoiceView.reject'), style: 'destructive', onPress: (note?: string) => act(p, 'rejected', note || undefined) },
-      ]);
-    } else {
-      Alert.alert(t('invoiceView.rejectTitle'), money(p.amount, { decimals: 2 }), [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('invoiceView.reject'), style: 'destructive', onPress: () => act(p, 'rejected') },
-      ]);
-    }
-  };
+  // Reject asks for a reason (sent as `note`; the tenant sees it) — on iOS and Android
+  const [rejecting, setRejecting] = useState<Payment | null>(null);
+  const reject = (p: Payment) => setRejecting(p);
 
-  const header = (
-    <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-      <View style={styles.headerRow}>
-        <TouchableOpacity style={styles.iconBtn} onPress={() => nav.goBack()} hitSlop={6} accessibilityLabel="Back">
-          <Icon name="chevron-back" size={20} color={colors.ink} />
-        </TouchableOpacity>
-        <Text style={[styles.title, { flex: 1 }]}>{t('payments.title')}</Text>
-      </View>
+  return (
+    <Screen header={header} tabBarSpace={tabBarSpace} refreshing={refreshing} onRefresh={refresh} contentStyle={{ paddingTop: spacing.md }}>
       <Segments<View_>
-        style={{ marginTop: 12 }}
+        style={{ marginBottom: spacing.md }}
         value={view}
         onChange={setView}
         options={[
@@ -77,11 +93,6 @@ export default function PaymentsScreen() {
           { value: 'all', label: t('payments.all') },
         ]}
       />
-    </View>
-  );
-
-  return (
-    <Screen header={header} refreshing={refreshing} onRefresh={refresh} contentStyle={{ paddingTop: spacing.md }}>
       {loading ? <LoadingView /> : error ? <ErrorView message={error} onRetry={refresh} /> : list.length === 0 ? (
         <EmptyState
           icon={view === 'pending' ? 'checkmark-done-outline' : 'cash-outline'}
@@ -147,6 +158,11 @@ export default function PaymentsScreen() {
           })}
         </View>
       )}
+      <RejectPaymentSheet
+        payment={rejecting ? { id: rejecting.id, amount: rejecting.amount, tenantName: rejecting.invoice?.tenant?.name } : null}
+        onClose={() => setRejecting(null)}
+        onDone={() => { reload(); onChanged?.(); }}
+      />
     </Screen>
   );
 }
