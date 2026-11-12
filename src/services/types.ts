@@ -148,3 +148,37 @@ export interface DashboardReport {
     outstanding: number; expenses: number; netIncome: number; averageOccupancyRate: number;
   };
 }
+
+// ─── Meter readings: one row per room + date (FRONTEND_UPDATE 2026-11-11 meter readings §1) ──
+export type MeterType = 'electricity' | 'water';
+
+/** One meter inside a grouped row. Readings are numbers here (the old list sends strings). */
+export interface GroupedMeterReading {
+  id: number;
+  previousReading: number;
+  currentReading: number;
+  usage: number;
+  /** Signed image path — build the URL with `fileUrl()`. */
+  photo: string | null;
+  note: string | null;
+  invoiceId: number | null;
+  invoice: { id: number; invoiceNumber: string; status: InvoiceStatus } | null;
+  /** On an invoice that isn't cancelled → the server refuses edit / delete. */
+  locked: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** `GET /utility-readings/grouped` row: one room on one reading date. */
+export interface GroupedReadingRow {
+  /** Unique per row — list key only, never send it to the API. */
+  key: string;
+  unitId: number;
+  /** YYYY-MM-DD */
+  readingDate: string;
+  unit: { id: number; unitCode: string; floorNumber: string | null; propertyId: number } | null;
+  /** Billed tenant, else the room's current tenant; null for an empty room. */
+  tenant: { id: number; name: string; phoneNumber?: string | null } | null;
+  electricity: GroupedMeterReading | null;
+  water: GroupedMeterReading | null;
+}

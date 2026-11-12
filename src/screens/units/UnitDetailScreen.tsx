@@ -6,7 +6,8 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import { dayLabel, statusLabel } from '../../i18n';
-import { pickList, pickOne, unitsApi, utilityApi } from '../../services/api';
+import { pickList, pickOne, unitsApi, utilityApi, type GroupedReadingRow } from '../../services/api';
+import { byNewest, hasLockedMeter, METER_TYPES } from '../../utils/readings';
 import { useAuth } from '../../context/AuthContext';
 import { useApi } from '../../hooks/useApi';
 import { confirmAction, ErrorView, LoadingView, ProgressBar, Screen } from '../../components/ui';
@@ -39,16 +40,16 @@ export default function UnitDetailScreen() {
   const { data, loading, error, refresh, refreshing } = useApi(async () => {
     const [u, r] = await Promise.all([
       unitsApi.get(unitId),
-      utilityApi.list({ unitId, limit: 10, sort: '-readingDate' }).catch(() => null),
+      // One row per reading date, both meters side by side. Not limited to the active property:
+      // this room's history is wanted whatever property is selected.
+      utilityApi.grouped({ unitId, propertyId: undefined, limit: 6, sort: '-readingDate' }).catch(() => null),
     ]);
-    return { unit: pickOne<any>(u, 'units', 'unit'), readings: pickList(r, 'utilityReadings') };
+    return { unit: pickOne<any>(u, 'units', 'unit'), readings: pickList<GroupedReadingRow>(r, 'rows') };
   }, [unitId]);
 
   const unit = data?.unit;
   const contract = activeContract(unit);
-  const readings = (data?.readings ?? [])
-    .filter((r: any) => r.unitId === unitId)
-    .sort((a: any, b: any) => String(b.readingDate).localeCompare(String(a.readingDate)) || b.id - a.id);
+  const readings = (data?.readings ?? []).filter(r => r.unitId === unitId).sort(byNewest);
 
   const status = unitStatus(unit);
   const tc = toneColors[statusTone(status)];
@@ -249,7 +250,8 @@ export default function UnitDetailScreen() {
           <View style={styles.meters}>
             {(Object.keys(METERS) as MeterType[]).map(k => {
               const m = METERS[k];
-              const latest = readings.find((r: any) => r.type === k);
+              const latest = readings.find(r => r[k])?.[k];
+              const latestDate = readings.find(r => r[k])?.readingDate;
               const value = latest ? toNum(latest.currentReading) : toNum(unit[m.startKey]);
               return (
                 <View key={k} style={[styles.meter, { backgroundColor: m.tone.bg }]}>
@@ -262,7 +264,7 @@ export default function UnitDetailScreen() {
                   </Text>
                   <Text style={styles.meterSub} numberOfLines={1}>
                     {latest
-                      ? `+${toNum(latest.usage).toLocaleString()} · ${dayLabel(latest.readingDate)}`
+                      ? `+${toNum(latest.usage).toLocaleString()} · ${dayLabel(latestDate)}`
                       : t('unitDetail.startReading')}
                   </Text>
                 </View>
@@ -272,29 +274,36 @@ export default function UnitDetailScreen() {
 
           {readings.length ? (
             <View style={[styles.card, styles.flush, { marginTop: 10 }]}>
-              {readings.slice(0, 6).map((r: any, i: number) => {
-                const m = METERS[(r.type as MeterType)] ?? METERS.electricity;
-                return (
-                  <Pressable
-                    key={r.id}
-                    onPress={() => nav.navigate('UtilityForm', { reading: r })}
-                    style={({ pressed }) => [styles.row, i > 0 && styles.sep, pressed && styles.pressed]}
-                  >
-                    <View style={[styles.smallIcon, { backgroundColor: m.tone.bg }]}>
-                      <Icon name={m.icon} size={15} color={m.tone.fg} />
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={styles.rowLabel}>
-                        {toNum(r.previousReading).toLocaleString()} → {toNum(r.currentReading).toLocaleString()}
-                      </Text>
-                      <Text style={styles.rowSub}>{dayLabel(r.readingDate, true)}</Text>
-                    </View>
-                    <Text style={styles.usage}>
-                      +{toNum(r.usage).toLocaleString()} <Text style={styles.usageUnit}>{m.unit}</Text>
-                    </Text>
-                  </Pressable>
-                );
-              })}
+              {readings.slice(0, 6).map((r, i) => (
+                <Pressable
+                  key={r.key}
+                  onPress={() => nav.navigate('UtilityForm', { row: r })}
+                  style={({ pressed }) => [styles.row, i > 0 && styles.sep, pressed && styles.pressed]}
+                >
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.rowLabel}>{dayLabel(r.readingDate, true)}</Text>
+                    {hasLockedMeter(r) ? (
+                      <View style={styles.billedLine}>
+                        <Icon name="lock-closed" size={11} color={colors.muted} />
+                        <Text style={styles.rowSub}>{t('reading.locked')}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  {METER_TYPES.map(k => {
+                    const m = METERS[k];
+                    const reading = r[k];
+                    return (
+                      <View key={k} style={styles.rowMeter}>
+                        <Icon name={m.icon} size={13} color={reading ? m.tone.fg : colors.muted} />
+                        <Text style={styles.usage}>
+                          {reading ? `+${toNum(reading.usage).toLocaleString()}` : '—'}
+                          {reading ? <Text style={styles.usageUnit}> {m.unit}</Text> : null}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </Pressable>
+              ))}
             </View>
           ) : null}
 
@@ -388,6 +397,8 @@ const styles = StyleSheet.create({
   meterSub: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   usage: { fontSize: 14, fontWeight: '600', color: colors.ink },
   usageUnit: { fontSize: 12, fontWeight: '500', color: colors.muted },
+  rowMeter: { flexDirection: 'row', alignItems: 'center', gap: 4, minWidth: 72, justifyContent: 'flex-end' },
+  billedLine: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 
   deleteRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,

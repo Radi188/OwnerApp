@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '../../components/Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -7,14 +7,21 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import { useTranslation } from 'react-i18next';
 import { dayLabel, monthLabel, monthsShort } from '../../i18n';
 import Segments from '../../components/Segments';
-import { formOptionsApi, invoicesApi, paymentsApi, pickList, unitsApi, utilityApi } from '../../services/api';
+import {
+  formOptionsApi, invoicesApi, paymentsApi, pickList, unitsApi, utilityApi,
+  type GroupedMeterReading, type GroupedReadingRow, type MeterType,
+} from '../../services/api';
 import { PaymentsView } from './PaymentsScreen';
 import { activeContract } from '../units/UnitsScreen';
 import { useAuth } from '../../context/AuthContext';
 import { useApi } from '../../hooks/useApi';
-import { EmptyState, ErrorView, FilterChips, LoadingView, ProgressBar, Screen, SearchBar, Sheet } from '../../components/ui';
+import { confirmAction, EmptyState, ErrorView, FilterChips, LoadingView, ProgressBar, Screen, SearchBar, Sheet } from '../../components/ui';
+import { toast } from '../../components/Toast';
 import { colors, radius, spacing, toneColors } from '../../theme';
-import { money, thisMonthYM, toNum } from '../../utils/format';
+import { errMsg, money, thisMonthYM, toNum } from '../../utils/format';
+import {
+  byNewest, editableMeters, hasLockedMeter, isRowBilled, METER, METER_TYPES, newestRowKeys, rowInvoice,
+} from '../../utils/readings';
 
 type Tab = 'invoices' | 'payments' | 'readings';
 type InvoiceFilter = 'all' | 'unpaid' | 'overdue' | 'paid';
@@ -374,17 +381,22 @@ function MonthSheet({ visible, value, onClose, onChange }: {
 }
 
 // ─── Meter readings ──────────────────────────────────────────────────────────
+// One card per room + reading date (`GET /utility-readings/grouped`), electricity and water side
+// by side. Occupied rooms without a reading this month get a "Missing" card.
 
-type Meter = 'electricity' | 'water';
-type ReadingView = 'all' | 'missing' | 'recorded';
-type UnitMeters = { electricity?: any; water?: any };
+type ReadingView = 'all' | 'missing' | 'unbilled' | 'billed';
 
-const METER: Record<Meter, { icon: string; unit: string; tone: { fg: string; bg: string } }> = {
-  electricity: { icon: 'flash', unit: 'kWh', tone: toneColors.warning },
-  water:       { icon: 'water', unit: 'm³',  tone: toneColors.info },
+type ReadingCard = {
+  key: string;
+  unitId: number;
+  code: string;
+  floor?: string | null;
+  tenant?: string;
+  /** null → occupied room with no reading this month */
+  row: GroupedReadingRow | null;
+  /** This is the room's newest row (only that one can get a missing meter added) */
+  newest: boolean;
 };
-
-const unitIdOf = (r: any) => r.unitId ?? r.unit?.id;
 
 function shiftMonth(ym: string, delta: number): string {
   const [y, m] = ym.split('-').map(Number);
@@ -392,29 +404,11 @@ function shiftMonth(ym: string, delta: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-/** Latest electricity + water reading per unit within one month. `readings` must be newest-first. */
-function metersInMonth(readings: any[], ym: string): Map<number, UnitMeters> {
-  const map = new Map<number, UnitMeters>();
-  readings.forEach(r => {
-    if (String(r.readingDate ?? '').slice(0, 7) !== ym) return;
-    const type = r.type as Meter;
-    if (type !== 'electricity' && type !== 'water') return;
-    const id = unitIdOf(r);
-    const entry = map.get(id) ?? {};
-    if (!entry[type]) entry[type] = r;
-    map.set(id, entry);
-  });
-  return map;
-}
-
-function usageTotals(map: Map<number, UnitMeters>) {
-  let electricity = 0;
-  let water = 0;
-  map.forEach(m => {
-    electricity += toNum(m.electricity?.usage);
-    water += toNum(m.water?.usage);
-  });
-  return { electricity, water };
+function usageTotals(rows: GroupedReadingRow[]) {
+  return rows.reduce(
+    (s, r) => ({ electricity: s.electricity + toNum(r.electricity?.usage), water: s.water + toNum(r.water?.usage) }),
+    { electricity: 0, water: 0 },
+  );
 }
 
 function ReadingsTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
@@ -422,72 +416,122 @@ function ReadingsTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   const nav = useNavigation<any>();
   const { propertyId, can } = useAuth();
   const canRecord = can('create', 'utility reading');
+  const canEdit = can('edit', 'utility reading');
+  const canDelete = can('delete', 'utility reading');
   const [month, setMonth] = useState(thisMonthYM());
   const [view, setView] = useState<ReadingView>('all');
   const [q, setQ] = useState('');
   const isCurrentMonth = month >= thisMonthYM();
 
-  const { data, loading, error, refreshing, refresh } = useApi(async () => {
-    const [rd, un] = await Promise.all([
-      utilityApi.list({ sort: '-readingDate' }),
-      unitsApi.list({ propertyId: propertyId ?? undefined, sort: 'unitCode' }).catch(() => null),
+  const { data, loading, error, refreshing, refresh, reload } = useApi(async () => {
+    const scope = { propertyId: propertyId ?? undefined };
+    const [cur, prev, un] = await Promise.all([
+      // This month and anything after it: later rows tell us which row is each room's newest
+      utilityApi.groupedAll({ ...scope, from: `${month}-01` }),
+      utilityApi.groupedAll({ ...scope, month: shiftMonth(month, -1) }).catch(() => null),
+      unitsApi.list({ ...scope, sort: 'unitCode' }).catch(() => null),
     ]);
-    return { readings: pickList(rd, 'utilityReadings'), units: un ? pickList(un, 'units') : [] };
-  }, [propertyId]);
+    return { rows: cur.rows, prevRows: prev?.rows ?? [], units: un ? pickList(un, 'units') : [] };
+  }, [propertyId, month]);
 
-  const readings = useMemo(
-    () => (data?.readings ?? [])
-      // utility-readings can't be filtered by property server-side — scope by the reading's unit
-      .filter(r => propertyId == null || r.unit?.propertyId == null || r.unit.propertyId === propertyId)
-      .sort((a, b) => String(b.readingDate).localeCompare(String(a.readingDate)) || b.id - a.id),
-    [data, propertyId],
+  const monthRows = useMemo(
+    () => (data?.rows ?? []).filter(r => String(r.readingDate).slice(0, 7) === month),
+    [data, month],
   );
+  const totals = useMemo(() => usageTotals(monthRows), [monthRows]);
+  const prevTotals = useMemo(() => usageTotals(data?.prevRows ?? []), [data]);
 
-  const current = useMemo(() => metersInMonth(readings, month), [readings, month]);
-  const totals = useMemo(() => usageTotals(current), [current]);
-  const prevTotals = useMemo(() => usageTotals(metersInMonth(readings, shiftMonth(month, -1))), [readings, month]);
-
-  // Units to show: every occupied unit (they need reading) + any unit that has a reading this month
-  const rows = useMemo(() => {
+  // Row cards + a "Missing" card for every occupied room without a reading this month
+  const cards = useMemo<ReadingCard[]>(() => {
     const units = data?.units ?? [];
     const byId = new Map<number, any>(units.map(u => [u.id, u]));
-    const ids = new Set<number>([...units.filter(u => activeContract(u)).map(u => u.id), ...current.keys()]);
-    return [...ids].map(id => {
-      const u = byId.get(id);
-      const m = current.get(id) ?? {};
-      const any = m.electricity ?? m.water;
-      const latest = [m.electricity, m.water].filter(Boolean).sort((a, b) => String(b.readingDate).localeCompare(String(a.readingDate)))[0];
+    const newest = newestRowKeys(data?.rows ?? []);
+    const recorded = new Set(monthRows.map(r => r.unitId));
+    const rowCards = monthRows.map(r => {
+      const u = byId.get(r.unitId);
       return {
-        id,
-        code: String(u?.unitCode ?? any?.unit?.unitCode ?? id),
-        floor: u?.floorNumber ?? any?.unit?.floorNumber,
-        tenant: u ? activeContract(u)?.tenant?.name : undefined,
-        meters: m,
-        date: latest?.readingDate as string | undefined,
-        recorded: !!any,
+        key: r.key,
+        unitId: r.unitId,
+        code: String(r.unit?.unitCode ?? u?.unitCode ?? r.unitId),
+        floor: r.unit?.floorNumber ?? u?.floorNumber,
+        tenant: r.tenant?.name ?? activeContract(u)?.tenant?.name,
+        row: r,
+        newest: newest.get(r.unitId) === r.key,
       };
     });
-  }, [data, current]);
+    const missing = units
+      .filter(u => activeContract(u) && !recorded.has(u.id))
+      .map(u => ({
+        key: `missing-${u.id}`,
+        unitId: u.id as number,
+        code: String(u.unitCode ?? u.id),
+        floor: u.floorNumber,
+        tenant: activeContract(u)?.tenant?.name,
+        row: null,
+        newest: false,
+      }));
+    return [...rowCards, ...missing];
+  }, [data, monthRows]);
 
-  const done = rows.filter(r => r.recorded).length;
+  const done = new Set(monthRows.map(r => r.unitId)).size;
+  const roomCount = done + cards.filter(c => !c.row).length;
+  const inView = (c: ReadingCard, v: ReadingView) =>
+    v === 'all' ? true
+      : v === 'missing' ? !c.row
+        : v === 'billed' ? !!c.row && isRowBilled(c.row)
+          : !!c.row && !isRowBilled(c.row);
+  const counts = {
+    all: cards.length,
+    missing: cards.filter(c => inView(c, 'missing')).length,
+    unbilled: cards.filter(c => inView(c, 'unbilled')).length,
+    billed: cards.filter(c => inView(c, 'billed')).length,
+  };
 
   const floors = useMemo(() => {
     const s = q.trim().toLowerCase();
-    const list = rows
-      .filter(r => view === 'all' || (view === 'recorded' ? r.recorded : !r.recorded))
-      .filter(r => !s || r.code.toLowerCase().includes(s) || (r.tenant ?? '').toLowerCase().includes(s))
-      .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
-    const map = new Map<string, typeof list>();
-    list.forEach(r => {
-      const f = r.floor != null && r.floor !== '' ? String(r.floor) : '—';
-      map.set(f, [...(map.get(f) ?? []), r]);
+    const list = cards
+      .filter(c => inView(c, view))
+      .filter(c => !s || [c.code, c.tenant, c.row?.electricity?.note, c.row?.water?.note]
+        .some(x => String(x ?? '').toLowerCase().includes(s)))
+      .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })
+        || (a.row && b.row ? byNewest(a.row, b.row) : a.row ? -1 : b.row ? 1 : 0));
+    const map = new Map<string, ReadingCard[]>();
+    list.forEach(c => {
+      const f = c.floor != null && c.floor !== '' ? String(c.floor) : '—';
+      map.set(f, [...(map.get(f) ?? []), c]);
     });
     const rank = (f: string) => (f === '—' || isNaN(Number(f)) ? Infinity : Number(f));
     return [...map.entries()].sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]));
-  }, [rows, view, q]);
+  }, [cards, view, q]);
 
   const record = (unitId: number) => nav.navigate('UtilityForm', { unitId });
-  const edit = (reading: any) => nav.navigate('UtilityForm', { reading });
+  const edit = (row: GroupedReadingRow) => nav.navigate('UtilityForm', { row });
+  // Same date as the row, so the new reading lands in the same row
+  const addMeter = (c: ReadingCard, type: MeterType) =>
+    nav.navigate('UtilityForm', { unitId: c.unitId, unitCode: c.code, addMeter: type, readingDate: c.row!.readingDate });
+
+  const removeMeter = (row: GroupedReadingRow, k: MeterType) => confirmAction(
+    t('reading.delete'),
+    t('reading.deleteMsg', { meter: t(`billing.${k}`).toLowerCase(), date: dayLabel(row.readingDate) }),
+    async () => {
+      try {
+        await utilityApi.remove(row[k]!.id);
+        toast.deleted();
+        reload();
+      } catch (e) {
+        toast.error(errMsg(e), { title: t('toast.couldNotDelete') });
+      }
+    },
+  );
+  // 🗑 acts on one meter: ask which when both can go
+  const onDelete = (row: GroupedReadingRow) => {
+    const ks = editableMeters(row);
+    if (ks.length === 1) return removeMeter(row, ks[0]);
+    Alert.alert(t('reading.delete'), t('reading.deleteWhich'), [
+      ...ks.map(k => ({ text: t(`billing.${k}`), style: 'destructive' as const, onPress: () => removeMeter(row, k) })),
+      { text: t('common.cancel'), style: 'cancel' as const },
+    ]);
+  };
 
   return (
     <Screen tabBarSpace refreshing={refreshing} onRefresh={refresh} header={<BillingHeader tab={tab} onTab={onTab} />} contentStyle={{ paddingTop: spacing.md }}>
@@ -510,7 +554,7 @@ function ReadingsTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
         </View>
 
         <View style={[styles.row, { marginTop: spacing.lg }]}>
-          {(['electricity', 'water'] as Meter[]).map(k => {
+          {METER_TYPES.map(k => {
             const cur = totals[k];
             const prev = prevTotals[k];
             const change = prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null;
@@ -532,13 +576,13 @@ function ReadingsTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
         </View>
 
         <View style={{ marginTop: 14 }}>
-          <ProgressBar value={rows.length ? done / rows.length : 0} height={6} />
+          <ProgressBar value={roomCount ? done / roomCount : 0} height={6} />
         </View>
-        <Text style={styles.sub}>{t('billing.recordedOf', { done, total: rows.length })}</Text>
-        {canRecord && isCurrentMonth && done < rows.length ? (
+        <Text style={styles.sub}>{t('billing.recordedOf', { done, total: roomCount })}</Text>
+        {canRecord && isCurrentMonth && done < roomCount ? (
           <TouchableOpacity style={styles.roundBtn} onPress={() => nav.navigate('MeterRound')} activeOpacity={0.8}>
             <Icon name="walk-outline" size={17} color={colors.white} />
-            <Text style={styles.roundText}>{t('round.start', { count: rows.length - done })}</Text>
+            <Text style={styles.roundText}>{t('round.start', { count: roomCount - done })}</Text>
           </TouchableOpacity>
         ) : null}
       </View>
@@ -551,9 +595,10 @@ function ReadingsTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
           value={view}
           onChange={setView}
           options={[
-            { value: 'all', label: t('billing.all'), count: rows.length },
-            { value: 'missing', label: t('billing.missing'), count: rows.length - done },
-            { value: 'recorded', label: t('billing.recorded'), count: done },
+            { value: 'all', label: t('billing.all'), count: counts.all },
+            { value: 'missing', label: t('billing.missing'), count: counts.missing },
+            { value: 'unbilled', label: t('reading.notBilled'), count: counts.unbilled },
+            { value: 'billed', label: t('reading.locked'), count: counts.billed },
           ]}
         />
       </View>
@@ -570,35 +615,73 @@ function ReadingsTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
         <View key={floor}>
           <View style={styles.groupHead}>
             <Text style={styles.groupTitle}>{floor === '—' ? t('units.noFloor') : t('units.floor', { floor })}</Text>
-            <Text style={styles.groupMeta}>{list.filter(r => r.recorded).length}/{list.length}</Text>
+            <Text style={styles.groupMeta}>{list.filter(c => c.row).length}/{list.length}</Text>
           </View>
           <View style={{ gap: 10 }}>
-            {list.map(r => (
-              <View key={r.id} style={styles.unitCard}>
-                <View style={styles.unitHead}>
-                  <Text style={styles.unitCode}>{r.code}</Text>
-                  <Text style={styles.unitTenant} numberOfLines={1}>{r.tenant ?? ''}</Text>
-                  {r.recorded ? (
-                    <Text style={styles.unitDate}>{dayLabel(r.date)}</Text>
-                  ) : (
-                    <View style={styles.missingPill}>
-                      <Text style={styles.missingText}>{t('billing.missing')}</Text>
+            {list.map(c => {
+              const row = c.row;
+              const editable = row ? editableMeters(row) : [];
+              const invoice = row ? rowInvoice(row) : null;
+              // "Add" the missing meter only on the room's newest row, while nothing on it is billed
+              const canAdd = canRecord && !!row && c.newest && !hasLockedMeter(row);
+              return (
+                <View key={c.key} style={styles.unitCard}>
+                  <View style={styles.unitHead}>
+                    <Text style={styles.unitCode}>{c.code}</Text>
+                    <Text style={styles.unitTenant} numberOfLines={1}>{c.tenant ?? ''}</Text>
+                    {row ? (
+                      <Text style={styles.unitDate}>{dayLabel(row.readingDate)}</Text>
+                    ) : (
+                      <View style={styles.missingPill}>
+                        <Text style={styles.missingText}>{t('billing.missing')}</Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.meters}>
+                    {METER_TYPES.map(k => (
+                      <MeterCell
+                        key={k}
+                        type={k}
+                        reading={row ? row[k] : null}
+                        // Missing room → record both; row without this meter → add it (newest row only)
+                        action={!row ? (canRecord ? 'record' : 'none') : row[k] ? (canEdit && editable.includes(k) ? 'edit' : 'none') : canAdd ? 'add' : 'none'}
+                        onPress={() => (!row ? record(c.unitId) : row[k] ? edit(row) : addMeter(c, k))}
+                      />
+                    ))}
+                  </View>
+                  {row ? (
+                    <View style={styles.rowFoot}>
+                      {invoice ? (
+                        <Pressable
+                          onPress={() => nav.navigate('InvoiceDetail', { invoiceId: invoice.id })}
+                          style={[styles.statusPill, { backgroundColor: toneColors.neutral.bg }]}
+                          accessibilityLabel={t('reading.billedOn', { number: invoice.invoiceNumber })}
+                          hitSlop={6}
+                        >
+                          <Icon name="lock-closed" size={11} color={toneColors.neutral.fg} />
+                          <Text style={[styles.statusPillText, { color: toneColors.neutral.fg }]} numberOfLines={1}>{invoice.invoiceNumber}</Text>
+                        </Pressable>
+                      ) : (
+                        <View style={[styles.statusPill, { backgroundColor: toneColors.warning.bg }]}>
+                          <Text style={[styles.statusPillText, { color: toneColors.warning.fg }]}>{t('reading.notBilled')}</Text>
+                        </View>
+                      )}
+                      <View style={{ flex: 1 }} />
+                      {canEdit && editable.length ? (
+                        <TouchableOpacity style={styles.rowAction} onPress={() => edit(row)} hitSlop={6} accessibilityLabel={t('reading.edit')}>
+                          <Icon name="create-outline" size={17} color={colors.ink} />
+                        </TouchableOpacity>
+                      ) : null}
+                      {canDelete && editable.length ? (
+                        <TouchableOpacity style={styles.rowAction} onPress={() => onDelete(row)} hitSlop={6} accessibilityLabel={t('reading.delete')}>
+                          <Icon name="trash-outline" size={17} color={colors.danger} />
+                        </TouchableOpacity>
+                      ) : null}
                     </View>
-                  )}
+                  ) : null}
                 </View>
-                <View style={styles.meters}>
-                  {(['electricity', 'water'] as Meter[]).map(k => (
-                    <MeterCell
-                      key={k}
-                      type={k}
-                      reading={r.meters[k]}
-                      canRecord={canRecord}
-                      onPress={() => (r.meters[k] ? edit(r.meters[k]) : record(r.id))}
-                    />
-                  ))}
-                </View>
-              </View>
-            ))}
+              );
+            })}
           </View>
         </View>
       ))}
@@ -606,33 +689,44 @@ function ReadingsTab({ tab, onTab }: { tab: Tab; onTab: (t: Tab) => void }) {
   );
 }
 
-function MeterCell({ type, reading, canRecord, onPress }: { type: Meter; reading?: any; canRecord: boolean; onPress: () => void }) {
+type MeterAction = 'edit' | 'add' | 'record' | 'none';
+
+function MeterCell({ type, reading, action, onPress }: {
+  type: MeterType; reading: GroupedMeterReading | null; action: MeterAction; onPress: () => void;
+}) {
   const { t } = useTranslation();
   const m = METER[type];
 
   if (!reading) {
+    const label = action === 'record' ? `+ ${t('billing.record')}`
+      : action === 'add' ? `+ ${t(type === 'water' ? 'reading.addWater' : 'reading.addElectricity')}`
+        : '—';
     return (
       <Pressable
         onPress={onPress}
-        disabled={!canRecord}
+        disabled={action === 'none'}
         style={({ pressed }) => [styles.meter, styles.meterEmpty, pressed && { opacity: 0.6 }]}
       >
         <View style={styles.meterHead}>
           <Icon name={m.icon} size={13} color={colors.muted} />
           <Text style={styles.meterLabel} numberOfLines={1}>{t(`billing.${type}`)}</Text>
         </View>
-        <Text style={styles.meterMissing}>{canRecord ? `+ ${t('billing.record')}` : t('billing.notRecorded')}</Text>
+        <Text style={[styles.meterMissing, action === 'none' && styles.meterDash]} numberOfLines={1}>{label}</Text>
       </Pressable>
     );
   }
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.meter, { backgroundColor: m.tone.bg }, pressed && { opacity: 0.7 }]}>
+    <Pressable
+      onPress={onPress}
+      disabled={action !== 'edit'}
+      style={({ pressed }) => [styles.meter, { backgroundColor: m.tone.bg }, pressed && { opacity: 0.7 }]}
+    >
       <View style={styles.meterHead}>
         <Icon name={m.icon} size={13} color={m.tone.fg} />
         <Text style={[styles.meterLabel, { flex: 1 }]} numberOfLines={1}>{t(`billing.${type}`)}</Text>
         {/* Billed on an invoice → locked (edit/delete blocked by the server) */}
-        {reading.invoiceId != null ? <Icon name="lock-closed" size={11} color={colors.muted} accessibilityLabel={t('reading.locked')} /> : null}
+        {reading.locked ? <Icon name="lock-closed" size={11} color={colors.muted} accessibilityLabel={t('reading.locked')} /> : null}
       </View>
       <Text style={[styles.meterValue, { color: m.tone.fg }]} numberOfLines={1} adjustsFontSizeToFit>
         {toNum(reading.usage).toLocaleString()} <Text style={styles.meterUnit}>{m.unit}</Text>
@@ -758,6 +852,17 @@ const styles = StyleSheet.create({
   meterUnit: { fontSize: 12, fontWeight: '500', color: colors.textSecondary },
   meterRange: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
   meterMissing: { fontSize: 13, fontWeight: '600', color: colors.primary, marginTop: 8 },
+  meterDash: { color: colors.muted, fontWeight: '500' },
+  rowFoot: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill,
+  },
+  statusPillText: { fontSize: 11, fontWeight: '700' },
+  rowAction: {
+    width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.bg,
+  },
 
   // Month sheet
   yearRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },

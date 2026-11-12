@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import i18n from '../i18n';
 import type {
-  BillingStrategy, ContractKind, DashboardReport, Gender, InvoiceStatus, Money, MoveInBody, MoveOutBody,
+  BillingStrategy, ContractKind, DashboardReport, Gender, GroupedReadingRow, InvoiceStatus, Money, MoveInBody, MoveOutBody,
   PaymentMethod, PaymentStatusReport, Settlement, TenantCredentials,
 } from './types';
 
@@ -353,7 +353,7 @@ const del = (path: string) => apiFetch(path, { method: 'DELETE' });
  * Loads every row of a paginated list. The API returns `{ result, total, data: { <key>: [...] } }`
  * (FRONTEND_GUIDE §2). Pages are requested one by one with the same `limit` until we have `total`
  * rows — the server can return short pages (a page with `limit=12` may hold only 6 invoices when
- * related rows are joined), so we never assume a page is full. Rows are de-duplicated by `id`.
+ * related rows are joined), so we never assume a page is full. Rows are de-duplicated by `id` (or `key`).
  */
 export async function fetchAllPages<T = any>(
   load: (page: number, limit: number) => Promise<any>,
@@ -366,7 +366,7 @@ export async function fetchAllPages<T = any>(
     const rows: T[] = pickList<T>(res, ...keys);
     total = Math.max(total, Number(res?.total ?? res?.result ?? 0) || 0);
     const before = byId.size;
-    rows.forEach((r: any) => byId.set(r?.id ?? JSON.stringify(r), r));
+    rows.forEach((r: any) => byId.set(r?.id ?? r?.key ?? JSON.stringify(r), r));
     const added = byId.size - before;
     // Done when the server has nothing more, nothing new arrived, or we hold every row
     if (rows.length === 0 || added === 0 || byId.size >= total) break;
@@ -610,6 +610,9 @@ export type UtilityInput = {
   note?: string;
 };
 
+const groupedReadings = (params: GroupedReadingParams = {}) =>
+  apiFetch(`/utility-readings/grouped${toQuery({ propertyId: _activePropertyId ?? undefined, ...params })}`);
+
 export const utilityApi = {
   /** Rows include `invoiceId` — non-null means billed, so edit/delete are blocked. */
   list: (params: ListParams = {}) => list('/utility-readings', params),
@@ -632,6 +635,56 @@ export const utilityApi = {
     readingDate?: string;
     note?: string;
   }) => apiFetch('/utility-readings/bulk', json('POST', body)),
+  /**
+   * One row per room + reading date, electricity and water side by side (meter-readings update §1).
+   * Scoped to the current property unless `propertyId` is given. Paging counts rows.
+   */
+  grouped: (params: GroupedReadingParams = {}) => groupedReadings(params),
+  /** Every grouped row for these filters (all pages). */
+  groupedAll: (params: Omit<GroupedReadingParams, 'page' | 'limit'> = {}) =>
+    fetchAllPages<GroupedReadingRow>(
+      (page, limit) => groupedReadings({ ...params, page, limit }),
+      { limit: 1000, keys: ['rows'] },
+    ),
+  /**
+   * Edit both meters of a row in one request — both are saved or neither (§3). Send only what
+   * changed; `readingDate` / `note` apply to every meter sent. Photos switch it to multipart.
+   * → `{ readings: [...] }`
+   */
+  bulkUpdate: (body: BulkReadingUpdate) => {
+    const withPhoto = isUploadFile(body.electricityPhoto) || isUploadFile(body.waterPhoto);
+    return apiFetch('/utility-readings/bulk', withPhoto ? { method: 'PATCH', body: toForm(body) } : json('PATCH', body));
+  },
+};
+
+export type GroupedReadingParams = {
+  propertyId?: number;
+  unitId?: number;
+  /** YYYY-MM */
+  month?: string;
+  /** YYYY-MM-DD, both days included */
+  from?: string;
+  to?: string;
+  /** true = on an invoice, false = not billed yet */
+  billed?: boolean;
+  /** Room code, current tenant name or note */
+  search?: string;
+  sort?: '-readingDate' | 'readingDate' | 'unitCode' | '-unitCode';
+  page?: number;
+  /** Default 100, max 1000 */
+  limit?: number;
+};
+
+export type BulkReadingUpdate = {
+  electricityId?: number;
+  electricityReading?: number;
+  waterId?: number;
+  waterReading?: number;
+  readingDate?: string;
+  /** `''` clears it */
+  note?: string;
+  electricityPhoto?: UploadFile;
+  waterPhoto?: UploadFile;
 };
 
 // ─── Invoices ─────────────────────────────────────────────────────────────────

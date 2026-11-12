@@ -38,6 +38,7 @@ import ExpensesScreen from '../screens/expenses/ExpensesScreen';
 import TransactionFormScreen from '../screens/expenses/TransactionFormScreen';
 import CategoriesScreen from '../screens/expenses/CategoriesScreen';
 import UtilityFormScreen from '../screens/billing/UtilityFormScreen';
+import type { GroupedReadingRow, MeterType } from '../services/types';
 import ContractsScreen from '../screens/contracts/ContractsScreen';
 import ContractDetailScreen from '../screens/contracts/ContractDetailScreen';
 import ContractFormScreen from '../screens/contracts/ContractFormScreen';
@@ -78,7 +79,8 @@ export type AppStackParamList = {
   Expenses: undefined;
   TransactionForm: { transaction?: any; type?: 'expense' | 'income' } | undefined;
   Categories: undefined;
-  UtilityForm: { unitId?: number; reading?: any };
+  /** `row` → edit both meters of a grouped row; `addMeter` + `readingDate` → add a row's missing meter. */
+  UtilityForm: { unitId?: number; unitCode?: string; row?: GroupedReadingRow; addMeter?: MeterType; readingDate?: string };
   // Contracts
   Contracts: undefined;
   ContractDetail: { contractId: number };

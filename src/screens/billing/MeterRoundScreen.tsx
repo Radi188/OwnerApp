@@ -30,15 +30,13 @@ export default function MeterRoundScreen() {
   const base = useApi(async () => {
     const [u, r] = await Promise.all([
       unitsApi.list({ sort: 'unitCode', limit: 500 }),
-      utilityApi.list({ sort: '-readingDate', limit: 500 }).catch(() => null),
+      utilityApi.groupedAll({ month }).catch(() => null),
     ]);
     const units = pickList(u, 'units')
       .filter((x: any) => activeContract(x))
       .sort((a: any, b: any) => (Number(a.floorNumber) || 0) - (Number(b.floorNumber) || 0)
         || String(a.unitCode).localeCompare(String(b.unitCode), undefined, { numeric: true }));
-    const read = new Set<number>(pickList(r, 'utilityReadings')
-      .filter((x: any) => String(x.readingDate ?? '').slice(0, 7) === month)
-      .map((x: any) => x.unitId ?? x.unit?.id));
+    const read = new Set<number>((r?.rows ?? []).map(x => x.unitId));
     return { units, read };
   }, [propertyId], { refetchOnFocus: false });
 
